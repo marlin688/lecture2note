@@ -37,7 +37,7 @@ def call_claude(transcript: str, subject: str, model: str = DEFAULT_MODEL) -> st
 
     with client.messages.stream(
         model=model,
-        max_tokens=16000,
+        max_tokens=32000,
         temperature=0.1,
         system=system_prompt,
         messages=[{"role": "user", "content": user_message}],
@@ -68,7 +68,7 @@ def call_gemini(transcript: str, subject: str, model: str) -> str:
         config=genai.types.GenerateContentConfig(
             system_instruction=system_prompt,
             temperature=0.1,
-            max_output_tokens=16000,
+            max_output_tokens=32000,
         ),
     )
 
@@ -87,6 +87,42 @@ def _fix_json_escapes(text: str) -> str:
     return re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', text)
 
 
+def _fix_unescaped_quotes(text: str) -> str:
+    """修复 JSON 字符串值中未转义的双引号。
+
+    迭代策略：反复尝试 json.loads，在报错位置将非结构性双引号转义。
+    """
+    chars = list(text)
+    max_attempts = 50
+
+    for _ in range(max_attempts):
+        current = ''.join(chars)
+        try:
+            json.loads(current)
+            return current
+        except json.JSONDecodeError as e:
+            pos = e.pos
+            if pos is None or pos >= len(chars):
+                return current
+            # 向前找到导致问题的引号（通常是 pos 之前最近的未转义引号）
+            # 错误通常在引号后一个字符被报告
+            # 找到 pos 前面最近的双引号
+            search_pos = pos - 1
+            while search_pos >= 0:
+                if chars[search_pos] == '"' and (search_pos == 0 or chars[search_pos - 1] != '\\'):
+                    # 检查这个引号前面的字符是否暗示它是内容中的引号
+                    prev_char = chars[search_pos - 1] if search_pos > 0 else ''
+                    # JSON 结构引号前面通常是 { [ , : 空白 或字符串开头
+                    if prev_char not in '{[,:  \t\n\r\\':
+                        chars[search_pos] = '\\"'
+                        break
+                search_pos -= 1
+            else:
+                return current  # 找不到可修复的引号
+
+    return ''.join(chars)
+
+
 def parse_response(raw_text: str) -> dict:
     """解析模型返回的 JSON，处理代码块包裹、非法转义等异常情况。"""
     text = raw_text.strip()
@@ -97,9 +133,21 @@ def parse_response(raw_text: str) -> dict:
     except json.JSONDecodeError:
         pass
 
+    # 修复字符串内未转义的双引号后重试
+    try:
+        return json.loads(_fix_unescaped_quotes(text))
+    except json.JSONDecodeError:
+        pass
+
     # 修复 LaTeX 等导致的非法 JSON 转义后重试
     try:
         return json.loads(_fix_json_escapes(text))
+    except json.JSONDecodeError:
+        pass
+
+    # 同时修复引号和转义
+    try:
+        return json.loads(_fix_json_escapes(_fix_unescaped_quotes(text)))
     except json.JSONDecodeError:
         pass
 
@@ -111,28 +159,24 @@ def parse_response(raw_text: str) -> dict:
         if text.rstrip().endswith("```"):
             text = text.rstrip()[:-3]
         text = text.strip()
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            pass
-        try:
-            return json.loads(_fix_json_escapes(text))
-        except json.JSONDecodeError:
-            pass
+        for fixer in [lambda t: t, _fix_unescaped_quotes, _fix_json_escapes,
+                      lambda t: _fix_json_escapes(_fix_unescaped_quotes(t))]:
+            try:
+                return json.loads(fixer(text))
+            except json.JSONDecodeError:
+                pass
 
     # 尝试找到第一个 { 和最后一个 } 之间的内容
     first_brace = text.find("{")
     last_brace = text.rfind("}")
     if first_brace != -1 and last_brace > first_brace:
         candidate = text[first_brace : last_brace + 1]
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
-            pass
-        try:
-            return json.loads(_fix_json_escapes(candidate))
-        except json.JSONDecodeError:
-            pass
+        for fixer in [lambda t: t, _fix_unescaped_quotes, _fix_json_escapes,
+                      lambda t: _fix_json_escapes(_fix_unescaped_quotes(t))]:
+            try:
+                return json.loads(fixer(candidate))
+            except json.JSONDecodeError:
+                pass
 
     # 全部失败，降级输出
     return {

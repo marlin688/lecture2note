@@ -43,7 +43,7 @@ cp .env.example .env
 ### 使用
 
 ```bash
-# 基本用法
+# 基本用法（使用环境变量中配置的模型）
 python main.py -i 转录文本.txt
 
 # 指定输出文件名
@@ -55,8 +55,14 @@ python main.py -i 转录文本.txt -s "深度学习"
 # 同时保存 JSON 中间结果
 python main.py -i 转录文本.txt --save-json
 
-# 使用其他 Claude 模型
+# 使用 Claude Opus（效果最好，推荐用于重要笔记）
+python main.py -i 转录文本.txt -s "大模型与AI编程" -m claude-opus-4-6 --save-json
+
+# 使用 Claude Sonnet（速度更快，性价比高）
 python main.py -i 转录文本.txt -m claude-sonnet-4-5-20250929
+
+# 使用 Gemini 模型
+python main.py -i 转录文本.txt -m gemini-3-pro-preview
 ```
 
 ### CLI 参数
@@ -66,7 +72,7 @@ python main.py -i 转录文本.txt -m claude-sonnet-4-5-20250929
 | `-i, --input` | 输入转录文本文件路径 | ✓ | — |
 | `-o, --output` | 输出 Markdown 文件路径 | | 自动生成 |
 | `-s, --subject` | 课程学科 | | — |
-| `-m, --model` | Claude 模型名称 | | `claude-sonnet-4-5-20250929` |
+| `-m, --model` | 模型名称（支持 Claude / Gemini） | | 环境变量 `ANTHROPIC_MODEL` 或 `claude-sonnet-4-5-20250929` |
 | `--save-json` | 同时保存 JSON 输出 | | `false` |
 
 ## 工作原理
