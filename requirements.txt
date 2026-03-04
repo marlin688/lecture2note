@@ -1,3 +1,4 @@
 anthropic
+google-genai
 python-dotenv
 click

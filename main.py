@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from pathlib import Path
 
@@ -23,10 +24,14 @@ def _slugify(text: str) -> str:
 @click.option("-i", "--input", "input_path", required=True, type=click.Path(exists=True), help="输入 txt 文件路径")
 @click.option("-o", "--output", "output_path", default=None, type=click.Path(), help="输出 md 文件路径")
 @click.option("-s", "--subject", default="", help="课程学科")
-@click.option("-m", "--model", default="claude-sonnet-4-5-20250929", help="模型名称")
+@click.option("-m", "--model", default=None, help="模型名称（默认读取环境变量 ANTHROPIC_MODEL / GEMINI_MODEL）")
 @click.option("--save-json", is_flag=True, help="同时保存中间 JSON")
 def main(input_path, output_path, subject, model, save_json):
     """Lecture2Note - 将课堂录音转写文本整理为结构化笔记"""
+    # 0. 确定模型：优先命令行参数 > 环境变量 > 硬编码默认
+    if model is None:
+        model = os.environ.get("ANTHROPIC_MODEL") or os.environ.get("GEMINI_MODEL") or "claude-sonnet-4-5-20250929"
+
     # 1. 读取输入
     transcript = Path(input_path).read_text(encoding="utf-8")
     char_count = len(transcript)
@@ -35,7 +40,8 @@ def main(input_path, output_path, subject, model, save_json):
     click.echo(f"   字符数: {char_count}  行数: {line_count}")
 
     # 2. 调用 API 生成笔记
-    click.echo("🤖 正在调用 Claude 生成笔记...")
+    provider = "Gemini" if model.startswith("gemini") else "Claude"
+    click.echo(f"🤖 正在调用 {provider} ({model}) 生成笔记...")
     notes = process_transcript(transcript, subject, model)
 
     section_count = len(notes.get("sections", []))

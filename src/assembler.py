@@ -71,8 +71,8 @@ def assemble_markdown(notes: dict) -> str:
             lines.append(content)
             lines.append("")
 
-        # 老师强调
-        if emphasis:
+        # 老师强调（过滤字符串 "null"）
+        if emphasis and emphasis != "null":
             lines.append(f"> ⚠️ **老师强调**：{emphasis}")
             lines.append("")
 
