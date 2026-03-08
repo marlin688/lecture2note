@@ -1,16 +1,22 @@
 import json
 import os
 import re
+import sys
+import threading
+import time
+import traceback
 from pathlib import Path
 
 import anthropic
+import click
 import httpx
 from google import genai
+from openai import OpenAI
 
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
-MAX_CHUNK_CHARS = 80_000
+MAX_CHUNK_CHARS = 4_000
 
 
 def load_system_prompt() -> str:
@@ -23,28 +29,193 @@ def _is_gemini_model(model: str) -> bool:
     return model.startswith("gemini")
 
 
+def _is_gpt_model(model: str) -> bool:
+    return model.startswith("gpt") or model.startswith("o1") or model.startswith("o3") or model.startswith("o4")
+
+
+def _stream_with_progress_raw(base_url, api_key, model, system_prompt, messages, max_tokens=32000):
+    """用原始 httpx SSE 流式调用 Anthropic API（绕过 SDK 的事件解析问题），返回 (文本, stop_reason)。"""
+    collected = []
+    char_count = 0
+    start = time.time()
+    first_token = False
+
+    spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    stop_event = threading.Event()
+
+    def _waiting_spinner():
+        i = 0
+        while not stop_event.is_set():
+            elapsed = int(time.time() - start)
+            click.echo(f"\r   {spinner_frames[i % len(spinner_frames)]} 思考中... {elapsed}s", nl=False)
+            i += 1
+            stop_event.wait(0.1)
+
+    spinner_thread = threading.Thread(target=_waiting_spinner, daemon=True)
+    spinner_thread.start()
+
+    stop_reason = None
+    url = f"{base_url.rstrip('/')}/v1/messages"
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "temperature": 0.1,
+        "system": system_prompt,
+        "messages": messages,
+        "stream": True,
+    }
+
+    try:
+        with httpx.Client(proxy=None, trust_env=False, timeout=httpx.Timeout(600.0, connect=60.0)) as http:
+            with http.stream("POST", url, headers=headers, json=body) as resp:
+                if resp.status_code != 200:
+                    resp.read()
+                    click.echo(f"\n   ⚠️ HTTP {resp.status_code}: {resp.text[:200]}")
+                    stop_reason = "error"
+                else:
+                    for line in resp.iter_lines():
+                        line = line.strip()
+                        if not line.startswith("data: "):
+                            continue
+                        data_str = line[6:]
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            data = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+                        evt_type = data.get("type", "")
+                        if evt_type == "content_block_delta":
+                            text_piece = data.get("delta", {}).get("text", "")
+                            if text_piece:
+                                if not first_token:
+                                    first_token = True
+                                    stop_event.set()
+                                    spinner_thread.join()
+                                    ttft = time.time() - start
+                                    click.echo(f"\r   ✓ 首字符到达 ({ttft:.1f}s)")
+                                collected.append(text_piece)
+                                char_count += len(text_piece)
+                                elapsed = int(time.time() - start)
+                                click.echo(f"\r   ⏳ 已生成 {char_count} 字符 ({elapsed}s)", nl=False)
+                        elif evt_type == "message_delta":
+                            sr = data.get("delta", {}).get("stop_reason")
+                            if sr:
+                                stop_reason = sr
+        if stop_reason is None:
+            stop_reason = "end_turn" if collected else "error"
+    except Exception as e:
+        click.echo(f"\n   ⚠️ 流中断: {type(e).__name__}: {e}")
+        stop_reason = "error" if not collected else "end_turn"
+    finally:
+        stop_event.set()
+        spinner_thread.join()
+
+    click.echo()
+    total = time.time() - start
+    click.echo(f"   📊 共 {char_count} 字符, 耗时 {total:.1f}s, 结束原因: {stop_reason}")
+
+    return "".join(collected), stop_reason
+
+
+def _call_non_stream(client, model, system_prompt, messages, max_tokens=16000):
+    """非流式调用 Claude API（流式失败时的降级方案），返回 (文本, stop_reason)。"""
+    start = time.time()
+    stop_event = threading.Event()
+    spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+    def _waiting():
+        i = 0
+        while not stop_event.is_set():
+            elapsed = int(time.time() - start)
+            click.echo(f"\r   {spinner_frames[i % len(spinner_frames)]} 非流式等待中... {elapsed}s", nl=False)
+            i += 1
+            stop_event.wait(0.1)
+
+    t = threading.Thread(target=_waiting, daemon=True)
+    t.start()
+    try:
+        response = client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            temperature=0.1,
+            system=system_prompt,
+            messages=messages,
+        )
+        stop_event.set()
+        t.join()
+        text = response.content[0].text if response.content else ""
+        total = time.time() - start
+        click.echo(f"\r   ✓ 非流式完成: {len(text)} 字符, {total:.1f}s, {response.stop_reason}")
+        return text, response.stop_reason
+    except Exception as e:
+        stop_event.set()
+        t.join()
+        click.echo(f"\n   ⚠️ 非流式失败: {type(e).__name__}: {e}")
+        return "", "error"
+
+
 def call_claude(transcript: str, subject: str, model: str = DEFAULT_MODEL) -> str:
-    """调用 Anthropic API 生成笔记，返回原始文本响应。"""
-    kwargs = {}
-    base_url = os.environ.get("ANTHROPIC_BASE_URL")
-    if base_url:
-        kwargs["base_url"] = base_url
-        kwargs["http_client"] = httpx.Client(proxy=None, trust_env=False)
-    client = anthropic.Anthropic(**kwargs)
+    """调用 Anthropic API 生成笔记，支持重试和截断自动续写。"""
+    base_url = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     system_prompt = load_system_prompt()
 
     user_message = f"学科：{subject}\n\n以下是课堂转写文本：\n\n{transcript}"
+    messages = [{"role": "user", "content": user_message}]
 
-    with client.messages.stream(
-        model=model,
-        max_tokens=32000,
-        temperature=0.1,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_message}],
-    ) as stream:
-        response = stream.get_final_message()
+    max_retries = 3
+    full_text = ""
+    stop_reason = None
+    for attempt in range(max_retries):
+        full_text, stop_reason = _stream_with_progress_raw(
+            base_url, api_key, model, system_prompt, messages
+        )
+        if full_text.strip() or stop_reason == "end_turn":
+            break
+        if attempt < max_retries - 1:
+            wait = 5 * (attempt + 1)
+            click.echo(f"   ⚠️ 未获得有效响应 ({stop_reason})，{wait}s 后重试 ({attempt + 2}/{max_retries})...")
+            time.sleep(wait)
 
-    return response.content[0].text
+    # 需要续写的情况：max_tokens 截断、连接中断(error/None)且已有部分内容
+    max_continuations = 5
+    for i in range(max_continuations):
+        if stop_reason == "end_turn":
+            break
+        if stop_reason in ("max_tokens", "error", None) and full_text.strip():
+            click.echo(f"   🔄 响应未完成 ({stop_reason})，自动续写 ({i + 1}/{max_continuations})...")
+            messages = [
+                {"role": "user", "content": user_message},
+                {"role": "assistant", "content": full_text},
+                {"role": "user", "content": "你的 JSON 输出被截断了，请从断点处继续输出剩余的 JSON 内容（不要重复已输出的部分，直接接上）："},
+            ]
+            continuation, stop_reason = _stream_with_progress_raw(
+                base_url, api_key, model, system_prompt, messages
+            )
+            full_text += continuation
+        else:
+            break
+
+    return full_text
+
+
+def _spinner(stop_event: threading.Event):
+    """在后台显示旋转动画。"""
+    frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    i = 0
+    start = time.time()
+    while not stop_event.is_set():
+        elapsed = int(time.time() - start)
+        click.echo(f"\r   {frames[i % len(frames)]} 等待响应中... {elapsed}s", nl=False)
+        i += 1
+        stop_event.wait(0.1)
+    click.echo()
 
 
 def call_gemini(transcript: str, subject: str, model: str) -> str:
@@ -62,23 +233,155 @@ def call_gemini(transcript: str, subject: str, model: str) -> str:
     system_prompt = load_system_prompt()
     user_message = f"学科：{subject}\n\n以下是课堂转写文本：\n\n{transcript}"
 
-    response = client.models.generate_content(
-        model=model,
-        contents=user_message,
-        config=genai.types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            temperature=0.1,
-            max_output_tokens=32000,
-        ),
-    )
+    stop_event = threading.Event()
+    spinner_thread = threading.Thread(target=_spinner, args=(stop_event,), daemon=True)
+    spinner_thread.start()
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=user_message,
+            config=genai.types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=0.1,
+                max_output_tokens=32000,
+            ),
+        )
+    finally:
+        stop_event.set()
+        spinner_thread.join()
 
     return response.text
 
 
+def call_gpt(transcript: str, subject: str, model: str) -> str:
+    """调用 OpenAI 兼容 API 生成笔记，流式输出。支持 GPT 和通过代理的 Claude 模型。"""
+    if _is_gpt_model(model):
+        base_url = os.environ.get("GPT_BASE_URL")
+        api_key = os.environ.get("GPT_API_KEY", "")
+    else:
+        # Claude 等模型走代理的 OpenAI 兼容接口
+        base_url = os.environ.get("ANTHROPIC_BASE_URL") or os.environ.get("GPT_BASE_URL")
+        api_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GPT_API_KEY", "")
+
+    client_kwargs = {}
+    if base_url:
+        # 代理地址需要加 /v1 后缀
+        if not base_url.rstrip("/").endswith("/v1"):
+            base_url = base_url.rstrip("/") + "/v1"
+        client_kwargs["base_url"] = base_url
+        client_kwargs["http_client"] = httpx.Client(proxy=None, trust_env=False)
+
+    client = OpenAI(api_key=api_key, timeout=httpx.Timeout(600.0, connect=60.0), **client_kwargs)
+    system_prompt = load_system_prompt()
+    user_message = f"学科：{subject}\n\n以下是课堂转写文本：\n\n{transcript}"
+
+    collected = []
+    char_count = 0
+    start = time.time()
+    first_token = False
+    spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    stop_event = threading.Event()
+
+    def _waiting_spinner():
+        i = 0
+        while not stop_event.is_set():
+            elapsed = int(time.time() - start)
+            click.echo(f"\r   {spinner_frames[i % len(spinner_frames)]} 思考中... {elapsed}s", nl=False)
+            i += 1
+            stop_event.wait(0.1)
+
+    spinner_thread = threading.Thread(target=_waiting_spinner, daemon=True)
+    spinner_thread.start()
+
+    finish_reason = None
+    try:
+        stream = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            temperature=0.1,
+            max_tokens=32000,
+            stream=True,
+        )
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if delta and delta.content:
+                if not first_token:
+                    first_token = True
+                    stop_event.set()
+                    spinner_thread.join()
+                    ttft = time.time() - start
+                    click.echo(f"\r   ✓ 首字符到达 ({ttft:.1f}s)")
+                collected.append(delta.content)
+                char_count += len(delta.content)
+                elapsed = int(time.time() - start)
+                click.echo(f"\r   ⏳ 已生成 {char_count} 字符 ({elapsed}s)", nl=False)
+            if chunk.choices[0].finish_reason:
+                finish_reason = chunk.choices[0].finish_reason
+    except Exception as e:
+        click.echo(f"\n   ⚠️ 流中断: {type(e).__name__}: {e}")
+        finish_reason = "error"
+    finally:
+        stop_event.set()
+        spinner_thread.join()
+
+    click.echo()
+    total = time.time() - start
+    click.echo(f"   📊 共 {char_count} 字符, 耗时 {total:.1f}s, 结束原因: {finish_reason}")
+
+    full_text = "".join(collected)
+
+    # 如果因 max_tokens 截断，自动续写
+    if finish_reason == "length" and full_text.strip():
+        max_continuations = 5
+        for i in range(max_continuations):
+            click.echo(f"   🔄 响应未完成 (length)，自动续写 ({i + 1}/{max_continuations})...")
+            cont_collected = []
+            cont_count = 0
+            try:
+                cont_stream = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message},
+                        {"role": "assistant", "content": full_text},
+                        {"role": "user", "content": "你的 JSON 输出被截断了，请从断点处继续输出剩余的 JSON 内容（不要重复已输出的部分，直接接上）："},
+                    ],
+                    temperature=0.1,
+                    max_tokens=32000,
+                    stream=True,
+                )
+                for chunk in cont_stream:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    if delta and delta.content:
+                        cont_collected.append(delta.content)
+                        cont_count += len(delta.content)
+                        click.echo(f"\r   ⏳ 续写 {cont_count} 字符", nl=False)
+                    if chunk.choices[0].finish_reason:
+                        finish_reason = chunk.choices[0].finish_reason
+                click.echo()
+                full_text += "".join(cont_collected)
+                if finish_reason != "length":
+                    break
+            except Exception as e:
+                click.echo(f"\n   ⚠️ 续写失败: {type(e).__name__}: {e}")
+                break
+
+    return full_text
+
+
 def call_llm(transcript: str, subject: str, model: str = DEFAULT_MODEL) -> str:
-    """根据模型名称自动选择 Claude 或 Gemini API。"""
+    """根据模型名称自动选择 Claude、Gemini 或 GPT API。"""
     if _is_gemini_model(model):
         return call_gemini(transcript, subject, model)
+    if _is_gpt_model(model):
+        return call_gpt(transcript, subject, model)
     return call_claude(transcript, subject, model)
 
 
@@ -178,7 +481,11 @@ def parse_response(raw_text: str) -> dict:
             except json.JSONDecodeError:
                 pass
 
-    # 全部失败，降级输出
+    # 全部失败，判断是否为有意义的文本内容（非 JSON 的笔记）
+    if len(text) > 100:
+        # 模型直接输出了 Markdown 笔记而非 JSON，标记为原始 Markdown 直出
+        return {"_raw_markdown": raw_text}
+
     return {
         "title": "笔记（解析失败）",
         "subject": "未知",
@@ -277,6 +584,7 @@ def process_transcript(
 
     notes_list = []
     for i, chunk in enumerate(chunks, 1):
+        click.echo(f"📦 处理分片 [{i}/{len(chunks)}]...")
         hint = f"（这是第 {i}/{len(chunks)} 部分，请只整理本部分内容）\n\n"
         raw = call_llm(hint + chunk, subject, model)
         notes_list.append(parse_response(raw))

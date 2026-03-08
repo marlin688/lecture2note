@@ -30,7 +30,7 @@ def main(input_path, output_path, subject, model, save_json):
     """Lecture2Note - 将课堂录音转写文本整理为结构化笔记"""
     # 0. 确定模型：优先命令行参数 > 环境变量 > 硬编码默认
     if model is None:
-        model = os.environ.get("ANTHROPIC_MODEL") or os.environ.get("GEMINI_MODEL") or "claude-sonnet-4-5-20250929"
+        model = os.environ.get("ANTHROPIC_MODEL") or os.environ.get("GEMINI_MODEL") or os.environ.get("GPT_MODEL") or "claude-sonnet-4-5-20250929"
 
     # 1. 读取输入
     transcript = Path(input_path).read_text(encoding="utf-8")
@@ -40,27 +40,48 @@ def main(input_path, output_path, subject, model, save_json):
     click.echo(f"   字符数: {char_count}  行数: {line_count}")
 
     # 2. 调用 API 生成笔记
-    provider = "Gemini" if model.startswith("gemini") else "Claude"
+    if model.startswith("gemini"):
+        provider = "Gemini"
+    elif model.startswith(("gpt", "o1", "o3", "o4")):
+        provider = "GPT"
+    else:
+        provider = "Claude"
     click.echo(f"🤖 正在调用 {provider} ({model}) 生成笔记...")
     notes = process_transcript(transcript, subject, model)
 
-    section_count = len(notes.get("sections", []))
-    term_count = len(notes.get("key_terms", []))
-    click.echo(f"✅ 生成完成: {section_count} 个章节, {term_count} 个术语")
-
-    # 3. 组装 Markdown
+    # 3. 组装 Markdown 并保存
     OUTPUT_DIR.mkdir(exist_ok=True)
 
-    if output_path is None:
-        title = notes.get("title", "untitled")
-        filename = _slugify(title) + ".md"
-        output_path = OUTPUT_DIR / filename
+    if "_raw_markdown" in notes:
+        # 模型直接输出了 Markdown，跳过 assembler
+        md_content = notes["_raw_markdown"]
+        click.echo("✅ 生成完成 (模型直出 Markdown)")
+        if output_path is None:
+            # 从 Markdown 内容提取第一个 # 标题行
+            title = "untitled"
+            for line in md_content.strip().split("\n"):
+                if line.startswith("# "):
+                    title = line.lstrip("# ").strip()
+                    break
+            filename = _slugify(title) + ".md"
+            output_path = OUTPUT_DIR / filename
+        else:
+            output_path = Path(output_path)
     else:
-        output_path = Path(output_path)
+        section_count = len(notes.get("sections", []))
+        term_count = len(notes.get("key_terms", []))
+        click.echo(f"✅ 生成完成: {section_count} 个章节, {term_count} 个术语")
+        md_content = assemble_markdown(notes)
+        if output_path is None:
+            title = notes.get("title", "untitled")
+            filename = _slugify(title) + ".md"
+            output_path = OUTPUT_DIR / filename
+        else:
+            output_path = Path(output_path)
 
-    md_content = assemble_markdown(notes)
+    output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    Path(output_path).write_text(md_content, encoding="utf-8")
+    output_path.write_text(md_content, encoding="utf-8")
     click.echo(f"📝 笔记已保存: {output_path}")
 
     # 4. 保存 JSON
