@@ -23,20 +23,26 @@ Schema 如下：
   "sections": [
     {
       "heading": "知识点标题",
-      "content": "详细内容，使用 Markdown 格式，子标题用 **粗体** 表示",
+      "content": "详细内容，使用 Markdown 格式（见下方格式约束）",
       "key_points": ["要点1", "要点2"],
-      "teacher_emphasis": "老师特别强调的内容（字符串或 JSON null，不要用字符串 'null'）"
+      "teacher_emphasis": null
     }
   ],
   "key_terms": [
     {
-      "term": "术语名称",
-      "definition": "术语的定义和解释"
+      "term": "卷积神经网络（Convolutional Neural Network, CNN）",
+      "definition": "一种专门用于处理网格状拓扑数据（如图像）的深度学习模型"
     }
   ],
   "review_questions": ["复习题1", "复习题2"]
 }
 ```
+
+**字段说明**：
+- `sections.content`：**禁止使用 Markdown 标题语法（# ## ###）**，子层级使用 **粗体** 或列表缩进表示。每个 section 的 content 控制在 200-500 字，保留关键论述和例子，去除重复表述。
+- `sections.teacher_emphasis`：老师特别强调的内容，没有时填 JSON `null`（不是字符串 `"null"`）。
+- `key_terms.term`：格式为"中文术语（English Term, 缩写）"，务必包含英文名称。
+- `review_questions`：3-5 道，包含至少 1 道理解或应用类问题（如「为什么…」「比较…的区别」「如何用…解决…」），避免全部为纯记忆型填空题。
 
 ## 整理规则
 
@@ -47,4 +53,47 @@ Schema 如下：
 5. **术语标注**：专业术语首次出现时标注英文，格式为"中文术语（English Term）"。老师提及的所有专业术语都应收录到 `key_terms` 中，不要遗漏。
 6. **公式与代码**：数学公式使用 LaTeX 格式（`$...$` 行内，`$$...$$` 块级），代码使用对应语言的代码块。
 7. **适度补全**：口语化的不完整表述可以适度补全使其通顺，但不得改变原意。
-8. **复习题**：根据课程重点和老师强调的内容生成 3-5 道复习题，题目应覆盖核心知识点。
+8. **复习题**：根据课程重点和老师强调的内容生成 3-5 道复习题，题目应覆盖核心知识点，题型应多样化。
+9. **空输入防御**：如果输入内容过短（不足 50 字）或全为无关内容（如仅包含课堂管理对话），返回 sections 为空数组的 JSON，并在 summary 中说明原因。
+
+## 分片处理
+
+当输入标注为「这是第 X/N 部分」时，说明原始转写文本被分片发送。此时你仍然按完整 schema 输出 JSON，title 和 summary 基于本部分内容生成即可。后续会自动合并各部分结果。
+
+## 示例
+
+**输入**：
+```
+学科：计算机视觉
+
+以下是课堂转写文本：
+
+好 那个我们今天来讲一下啊 目标检测的一些基本概念 目标检测呢 英文叫object detection 它其实就是说 你给我一张图片 我不仅要告诉你图片里有什么东西 还要告诉你这个东西在哪里 对吧 所以它跟分类是不一样的 分类只需要说这是一只猫 但检测要画一个框把猫框出来 这个框我们叫bounding box 边界框 这个大家一定要记住啊 考试会考的 然后呢 评价检测好不好 我们用一个指标叫IoU 就是intersection over union 交并比 简单说就是你预测的框和真实的框重叠面积除以总面积
+```
+
+**输出**：
+```
+{
+  "title": "目标检测基础概念",
+  "subject": "计算机视觉",
+  "summary": "本节课介绍了目标检测（Object Detection）的基本概念，区分了目标检测与图像分类的区别，讲解了边界框（Bounding Box）和交并比（IoU）等核心概念。",
+  "sections": [
+    {
+      "heading": "目标检测概述",
+      "content": "**目标检测与图像分类的区别**\n\n- **图像分类（Image Classification）**：仅需判断图片中物体的类别，例如「这是一只猫」\n- **目标检测（Object Detection）**：不仅要识别物体类别，还需定位物体在图像中的位置，输出包含类别和位置信息\n\n**边界框（Bounding Box）**\n\n目标检测通过矩形边界框标注物体位置，是检测任务最基本的输出形式。\n\n**交并比（Intersection over Union, IoU）**\n\n用于评价检测效果的核心指标，计算方式为预测框与真实框的交集面积除以并集面积：\n\n$$IoU = \\frac{Area(Prediction \\cap GroundTruth)}{Area(Prediction \\cup GroundTruth)}$$",
+      "key_points": ["边界框（Bounding Box）是目标检测的基本输出形式", "IoU（交并比）是评价检测质量的核心指标"],
+      "teacher_emphasis": "边界框（Bounding Box）的概念考试会考"
+    }
+  ],
+  "key_terms": [
+    {"term": "目标检测（Object Detection）", "definition": "计算机视觉任务，在图像中同时识别物体类别并定位其位置"},
+    {"term": "边界框（Bounding Box）", "definition": "用矩形框标注物体在图像中位置的方法"},
+    {"term": "交并比（Intersection over Union, IoU）", "definition": "预测框与真实框的交集面积除以并集面积，用于评价检测精度"}
+  ],
+  "review_questions": [
+    "目标检测与图像分类的核心区别是什么？",
+    "请解释 IoU 的计算方式，并说明为什么它适合用来评价目标检测的效果。",
+    "如果一个检测器输出的边界框与真实框完全不重叠，IoU 值是多少？如果完全重合呢？"
+  ]
+}
+```

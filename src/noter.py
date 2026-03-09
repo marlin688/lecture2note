@@ -164,6 +164,8 @@ def call_claude(transcript: str, subject: str, model: str = DEFAULT_MODEL) -> st
     """调用 Anthropic API 生成笔记，支持重试和截断自动续写。"""
     base_url = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise click.ClickException("未设置 ANTHROPIC_API_KEY 环境变量，请在 .env 文件或环境变量中配置")
     system_prompt = load_system_prompt()
 
     user_message = f"学科：{subject}\n\n以下是课堂转写文本：\n\n{transcript}"
@@ -184,15 +186,18 @@ def call_claude(transcript: str, subject: str, model: str = DEFAULT_MODEL) -> st
             time.sleep(wait)
 
     # 需要续写的情况：max_tokens 截断、连接中断(error/None)且已有部分内容
+    # 续写时只发送尾部片段作为上下文，避免 context 膨胀超出模型限制
+    _CONTINUATION_TAIL_CHARS = 2000
     max_continuations = 5
     for i in range(max_continuations):
         if stop_reason == "end_turn":
             break
         if stop_reason in ("max_tokens", "error", None) and full_text.strip():
             click.echo(f"   🔄 响应未完成 ({stop_reason})，自动续写 ({i + 1}/{max_continuations})...")
+            tail = full_text[-_CONTINUATION_TAIL_CHARS:]
             messages = [
                 {"role": "user", "content": user_message},
-                {"role": "assistant", "content": full_text},
+                {"role": "assistant", "content": tail},
                 {"role": "user", "content": "你的 JSON 输出被截断了，请从断点处继续输出剩余的 JSON 内容（不要重复已输出的部分，直接接上）："},
             ]
             continuation, stop_reason = _stream_with_progress_raw(
@@ -220,6 +225,9 @@ def _spinner(stop_event: threading.Event):
 
 def call_gemini(transcript: str, subject: str, model: str) -> str:
     """调用 Gemini API 生成笔记，返回原始文本响应。"""
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        raise click.ClickException("未设置 GEMINI_API_KEY 环境变量，请在 .env 文件或环境变量中配置")
     base_url = os.environ.get("GEMINI_BASE_URL")
     http_opts = {}
     if base_url:
@@ -227,7 +235,7 @@ def call_gemini(transcript: str, subject: str, model: str) -> str:
         # 第三方国内代理不需要走本地代理，直连即可
         http_opts["httpxClient"] = httpx.Client(proxy=None, trust_env=False)
     client = genai.Client(
-        api_key=os.environ["GEMINI_API_KEY"],
+        api_key=api_key,
         http_options=http_opts or None,
     )
     system_prompt = load_system_prompt()
@@ -262,6 +270,9 @@ def call_gpt(transcript: str, subject: str, model: str) -> str:
         # Claude 等模型走代理的 OpenAI 兼容接口
         base_url = os.environ.get("ANTHROPIC_BASE_URL") or os.environ.get("GPT_BASE_URL")
         api_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GPT_API_KEY", "")
+    if not api_key:
+        key_name = "GPT_API_KEY" if _is_gpt_model(model) else "GPT_API_KEY 或 ANTHROPIC_API_KEY"
+        raise click.ClickException(f"未设置 {key_name} 环境变量，请在 .env 文件或环境变量中配置")
 
     client_kwargs = {}
     if base_url:
@@ -336,19 +347,22 @@ def call_gpt(transcript: str, subject: str, model: str) -> str:
     full_text = "".join(collected)
 
     # 如果因 max_tokens 截断，自动续写
+    # 续写时只发送尾部片段作为上下文，避免 context 膨胀超出模型限制
+    _CONTINUATION_TAIL_CHARS = 2000
     if finish_reason == "length" and full_text.strip():
         max_continuations = 5
         for i in range(max_continuations):
             click.echo(f"   🔄 响应未完成 (length)，自动续写 ({i + 1}/{max_continuations})...")
             cont_collected = []
             cont_count = 0
+            tail = full_text[-_CONTINUATION_TAIL_CHARS:]
             try:
                 cont_stream = client.chat.completions.create(
                     model=model,
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_message},
-                        {"role": "assistant", "content": full_text},
+                        {"role": "assistant", "content": tail},
                         {"role": "user", "content": "你的 JSON 输出被截断了，请从断点处继续输出剩余的 JSON 内容（不要重复已输出的部分，直接接上）："},
                     ],
                     temperature=0.1,
@@ -394,36 +408,35 @@ def _fix_unescaped_quotes(text: str) -> str:
     """修复 JSON 字符串值中未转义的双引号。
 
     迭代策略：反复尝试 json.loads，在报错位置将非结构性双引号转义。
+    每轮基于当前字符串重新操作，避免替换后索引错位。
     """
-    chars = list(text)
+    current = text
     max_attempts = 50
 
     for _ in range(max_attempts):
-        current = ''.join(chars)
         try:
             json.loads(current)
             return current
         except json.JSONDecodeError as e:
             pos = e.pos
-            if pos is None or pos >= len(chars):
+            if pos is None or pos >= len(current):
                 return current
-            # 向前找到导致问题的引号（通常是 pos 之前最近的未转义引号）
-            # 错误通常在引号后一个字符被报告
-            # 找到 pos 前面最近的双引号
+            # 向前找到导致问题的引号（错误通常在引号后一个字符被报告）
             search_pos = pos - 1
+            fixed = False
             while search_pos >= 0:
-                if chars[search_pos] == '"' and (search_pos == 0 or chars[search_pos - 1] != '\\'):
-                    # 检查这个引号前面的字符是否暗示它是内容中的引号
-                    prev_char = chars[search_pos - 1] if search_pos > 0 else ''
+                if current[search_pos] == '"' and (search_pos == 0 or current[search_pos - 1] != '\\'):
+                    prev_char = current[search_pos - 1] if search_pos > 0 else ''
                     # JSON 结构引号前面通常是 { [ , : 空白 或字符串开头
                     if prev_char not in '{[,:  \t\n\r\\':
-                        chars[search_pos] = '\\"'
+                        current = current[:search_pos] + '\\"' + current[search_pos + 1:]
+                        fixed = True
                         break
                 search_pos -= 1
-            else:
+            if not fixed:
                 return current  # 找不到可修复的引号
 
-    return ''.join(chars)
+    return current
 
 
 def parse_response(raw_text: str) -> dict:
