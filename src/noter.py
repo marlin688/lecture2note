@@ -551,10 +551,18 @@ def _merge_notes(notes_list: list[dict]) -> dict:
     if len(notes_list) == 1:
         return notes_list[0]
 
+    # 从各分片中取第一个非空的 title/subject/summary
+    def _first_non_empty(key):
+        for n in notes_list:
+            val = n.get(key, "")
+            if val:
+                return val
+        return ""
+
     merged = {
-        "title": notes_list[0].get("title", ""),
-        "subject": notes_list[0].get("subject", ""),
-        "summary": notes_list[0].get("summary", ""),
+        "title": _first_non_empty("title"),
+        "subject": _first_non_empty("subject"),
+        "summary": _first_non_empty("summary"),
         "sections": [],
         "key_terms": [],
         "review_questions": [],

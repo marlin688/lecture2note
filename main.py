@@ -17,7 +17,8 @@ OUTPUT_DIR = Path("output")
 def _slugify(text: str) -> str:
     """将标题转为安全的文件名。"""
     text = re.sub(r"[^\w\u4e00-\u9fff]+", "_", text)
-    return text.strip("_")[:80]
+    result = text.strip("_")[:80]
+    return result if result else "untitled"
 
 
 @click.command()
