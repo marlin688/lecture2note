@@ -71,9 +71,13 @@ def assemble_markdown(notes: dict) -> str:
             lines.append(content)
             lines.append("")
 
-        # 老师强调（过滤字符串 "null"）
+        # 老师强调（支持字符串或数组格式，过滤 "null"）
         if emphasis and emphasis != "null":
-            lines.append(f"> ⚠️ **老师强调**：{emphasis}")
+            if isinstance(emphasis, list):
+                for item in emphasis:
+                    lines.append(f"> ⚠️ **老师强调**：{item}")
+            else:
+                lines.append(f"> ⚠️ **老师强调**：{emphasis}")
             lines.append("")
 
         lines.append("---")
