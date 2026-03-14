@@ -516,8 +516,10 @@ def parse_response(raw_text: str) -> dict:
     }
 
 
-def split_transcript(text: str, max_chars: int = MAX_CHUNK_CHARS) -> list[str]:
-    """智能分片，优先在双换行（段落边界）处切分。"""
+OVERLAP_CHARS = 200
+
+def split_transcript(text: str, max_chars: int = MAX_CHUNK_CHARS, overlap: int = OVERLAP_CHARS) -> list[str]:
+    """智能分片，优先在双换行（段落边界）处切分，相邻分片之间保留重叠区域避免边界处丢失内容。"""
     if len(text) <= max_chars:
         return [text]
 
@@ -538,7 +540,9 @@ def split_transcript(text: str, max_chars: int = MAX_CHUNK_CHARS) -> list[str]:
             split_pos = max_chars
 
         chunks.append(remaining[:split_pos].strip())
-        remaining = remaining[split_pos:].strip()
+        # 回退 overlap 个字符，让下一片与当前片有重叠
+        overlap_start = max(0, split_pos - overlap)
+        remaining = remaining[overlap_start:].strip()
 
     if remaining:
         chunks.append(remaining)
@@ -546,12 +550,68 @@ def split_transcript(text: str, max_chars: int = MAX_CHUNK_CHARS) -> list[str]:
     return chunks
 
 
+def _extract_chinese_chars(text: str) -> set[str]:
+    """提取文本中的所有中文字符集合。"""
+    return set(re.findall(r'[\u4e00-\u9fff]', text))
+
+
+def _jaccard_similarity(set1: set, set2: set) -> float:
+    """计算两个集合的 Jaccard 相似度。"""
+    if not set1 or not set2:
+        return 0.0
+    return len(set1 & set2) / len(set1 | set2)
+
+
+def _sections_similar(sec1: dict, sec2: dict, threshold: float = 0.45) -> bool:
+    """判断两个 section 是否内容重复（基于标题+要点的中文字符重叠）。"""
+    # 用标题 + key_points 组合判断
+    text1 = sec1.get("heading", "") + " ".join(sec1.get("key_points", []))
+    text2 = sec2.get("heading", "") + " ".join(sec2.get("key_points", []))
+    chars1 = _extract_chinese_chars(text1)
+    chars2 = _extract_chinese_chars(text2)
+    return _jaccard_similarity(chars1, chars2) > threshold
+
+
+def _merge_two_sections(sec1: dict, sec2: dict) -> dict:
+    """合并两个重复 section，保留更长的 content，合并 key_points。"""
+    # 保留 content 更长的作为主体
+    if len(sec2.get("content", "")) > len(sec1.get("content", "")):
+        base, extra = sec2, sec1
+    else:
+        base, extra = sec1, sec2
+
+    merged_sec = dict(base)
+    # 合并 key_points 去重
+    existing_points = set(base.get("key_points", []))
+    merged_points = list(base.get("key_points", []))
+    for p in extra.get("key_points", []):
+        if p not in existing_points:
+            merged_points.append(p)
+            existing_points.add(p)
+    merged_sec["key_points"] = merged_points
+
+    # 保留非空的 teacher_emphasis
+    if not merged_sec.get("teacher_emphasis") and extra.get("teacher_emphasis"):
+        merged_sec["teacher_emphasis"] = extra["teacher_emphasis"]
+
+    return merged_sec
+
+
+def _normalize_term_key(term_str: str) -> str:
+    """提取术语的中文部分用于去重：'低秩分解（Low-rank Decomposition）' -> '低秩分解'"""
+    for sep in ('（', '('):
+        idx = term_str.find(sep)
+        if idx > 0:
+            return term_str[:idx].strip()
+    return term_str.strip()
+
+
 def _merge_notes(notes_list: list[dict]) -> dict:
-    """合并多个分片笔记：拼接 sections、去重术语、合并复习题。"""
+    """合并多个分片笔记：去重 sections、去重术语、合并复习题。"""
     if len(notes_list) == 1:
         return notes_list[0]
 
-    # 从各分片中取第一个非空的 title/subject/summary
+    # 从各分片中取第一个非空的 title/subject
     def _first_non_empty(key):
         for n in notes_list:
             val = n.get(key, "")
@@ -559,38 +619,92 @@ def _merge_notes(notes_list: list[dict]) -> dict:
                 return val
         return ""
 
+    # 合并所有分片的 summary，每片取第一句避免过长
+    all_summaries = []
+    for n in notes_list:
+        s = n.get("summary", "").strip()
+        if s:
+            # 取第一句（按句号/分号切分）
+            first_sent = re.split(r'[。；]', s)[0]
+            if first_sent:
+                all_summaries.append(first_sent.strip() + "。" if not first_sent.endswith("。") else first_sent.strip())
+    combined_summary = "".join(all_summaries) if all_summaries else ""
+    # 如果合并后仍然过长，截断到合理长度
+    if len(combined_summary) > 300:
+        # 找到 300 字符内最后一个句号
+        cut = combined_summary[:300].rfind("。")
+        if cut > 0:
+            combined_summary = combined_summary[:cut + 1]
+
     merged = {
         "title": _first_non_empty("title"),
         "subject": _first_non_empty("subject"),
-        "summary": _first_non_empty("summary"),
+        "summary": combined_summary,
         "sections": [],
         "key_terms": [],
         "review_questions": [],
     }
 
-    seen_terms = set()
-
+    # 收集所有 sections 并去重
+    all_sections = []
     for notes in notes_list:
-        merged["sections"].extend(notes.get("sections", []))
+        all_sections.extend(notes.get("sections", []))
 
+    deduped_sections = []
+    for sec in all_sections:
+        merged_with_existing = False
+        for i, existing in enumerate(deduped_sections):
+            if _sections_similar(sec, existing):
+                deduped_sections[i] = _merge_two_sections(existing, sec)
+                merged_with_existing = True
+                break
+        if not merged_with_existing:
+            deduped_sections.append(sec)
+    merged["sections"] = deduped_sections
+
+    # 术语去重（按中文部分归一化）
+    seen_terms = set()
+    for notes in notes_list:
         for term in notes.get("key_terms", []):
             term_name = term.get("term", "")
-            if term_name not in seen_terms:
-                seen_terms.add(term_name)
+            norm_key = _normalize_term_key(term_name)
+            if norm_key not in seen_terms:
+                seen_terms.add(norm_key)
                 merged["key_terms"].append(term)
 
-        merged["review_questions"].extend(notes.get("review_questions", []))
+    # 复习题去重（基于中文字符相似度）
+    all_questions = []
+    for notes in notes_list:
+        all_questions.extend(notes.get("review_questions", []))
 
-    # 复习题去重
-    seen_questions = set()
     unique_questions = []
-    for q in merged["review_questions"]:
-        if q not in seen_questions:
-            seen_questions.add(q)
+    for q in all_questions:
+        q_chars = _extract_chinese_chars(q)
+        is_dup = False
+        for existing in unique_questions:
+            existing_chars = _extract_chinese_chars(existing)
+            if _jaccard_similarity(q_chars, existing_chars) > 0.6:
+                is_dup = True
+                break
+        if not is_dup:
             unique_questions.append(q)
     merged["review_questions"] = unique_questions
 
     return merged
+
+
+def _count_sections(parsed: dict) -> int:
+    """统计解析结果中的 section 数量。"""
+    if "_raw_markdown" in parsed:
+        # 按 ## 标题数量估算 section 数
+        md = parsed["_raw_markdown"]
+        headings = [line for line in md.split("\n") if line.startswith("## ")]
+        return max(1, len(headings))
+    return len(parsed.get("sections", []))
+
+
+# 每 1000 字符的原文至少应产出的 section 数（低于此值触发重试）
+_MIN_SECTIONS_PER_1K = 0.5
 
 
 def process_transcript(
@@ -606,8 +720,42 @@ def process_transcript(
     notes_list = []
     for i, chunk in enumerate(chunks, 1):
         click.echo(f"📦 处理分片 [{i}/{len(chunks)}]...")
-        hint = f"（这是第 {i}/{len(chunks)} 部分，请只整理本部分内容）\n\n"
+        hint = (
+            f"（这是第 {i}/{len(chunks)} 部分，请只整理本部分内容。"
+            f"注意：不要遗漏本部分中的任何知识点，即使转写文本噪声较大也要尽力提取。"
+            f"特别注意：1）每个具名方法/网络/算法必须有独立描述；"
+            f"2）老师对多种方案的对比分析必须完整保留；"
+            f"3）训练技巧（如 batch 策略、优化器选择等）必须独立成节；"
+            f"4）老师的观点性总结和历史趋势讨论不可省略。）\n\n"
+        )
         raw = call_llm(hint + chunk, subject, model)
-        notes_list.append(parse_response(raw))
+        parsed = parse_response(raw)
+
+        # 产出过少时重试一次，并合并两次结果以最大化覆盖率
+        min_sections = max(1, int(len(chunk) / 1000 * _MIN_SECTIONS_PER_1K))
+        if _count_sections(parsed) < min_sections:
+            click.echo(f"   ⚠️ 分片 {i} 产出 {_count_sections(parsed)} 个章节，低于预期 {min_sections} 个，重试中...")
+            retry_hint = (
+                f"（这是第 {i}/{len(chunks)} 部分，请只整理本部分内容。"
+                f"重要提示：请仔细逐段阅读以下转写文本，尽可能多地提取知识点，"
+                f"每个不同的主题都应生成一个独立的 section。即使文本噪声很大，也请尽力识别。）\n\n"
+            )
+            raw = call_llm(retry_hint + chunk, subject, model)
+            retry_parsed = parse_response(raw)
+            retry_count = _count_sections(retry_parsed)
+            orig_count = _count_sections(parsed)
+
+            if "_raw_markdown" in parsed or "_raw_markdown" in retry_parsed:
+                # 有 raw_markdown 结果时取 section 数更多的那个
+                if retry_count > orig_count:
+                    parsed = retry_parsed
+                click.echo(f"   ✓ 取较优结果: {_count_sections(parsed)} 个章节")
+            else:
+                # 两个都是 JSON 结构化结果时合并（去重会在 _merge_notes 中处理）
+                merged_chunk = _merge_notes([parsed, retry_parsed])
+                click.echo(f"   ✓ 合并后共 {_count_sections(merged_chunk)} 个章节")
+                parsed = merged_chunk
+
+        notes_list.append(parsed)
 
     return _merge_notes(notes_list)

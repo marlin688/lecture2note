@@ -1,25 +1,31 @@
 # lecture2note
 
-基于 Claude AI 的课堂录音转录文本 → 结构化学习笔记工具。
+基于多模型 AI 的课堂录音转录文本 → 结构化学习笔记工具。
 
-将语音识别生成的课堂转录文本，自动整理为排版精美、结构清晰的 Markdown 学习笔记。
+支持 Claude、Gemini、GPT 等多种大模型，将语音识别生成的课堂转录文本自动整理为排版精美、结构清晰的 Markdown 学习笔记。
 
 ## 功能特性
 
-- **智能降噪** — 自动去除口头禅、重复、课堂管理等无关内容
+- **ASR 纠错** — 自动修正语音识别的同音替换、术语误识别、英文术语音译等错误
+- **智能降噪** — 去除口头禅、重复、课堂管理等无关内容，保留有教学价值的比喻和举例
 - **逻辑重组** — 按知识体系而非时间顺序组织笔记结构
 - **重点标注** — 识别并标记教师反复强调的内容
 - **术语整理** — 提取专业术语并标注英文对照与释义
-- **复习题生成** — 自动生成 3-5 道覆盖核心概念的复习题
+- **复习题生成** — 自动生成 3-5 道覆盖核心概念的复习题（含理解应用类题目）
 - **多格式输出** — 同时支持 Markdown（阅读）和 JSON（结构化数据）
 - **长文本分片** — 超长转录文本自动分片处理并智能合并去重
+- **多模型支持** — 支持 Claude、Gemini、GPT 系列模型，自动选择对应 API
+- **自动续写** — 输出被截断时自动续写，确保完整输出
 
 ## 快速开始
 
 ### 环境要求
 
 - Python 3.12+
-- [Anthropic API Key](https://console.anthropic.com/)
+- 至少一个 AI 模型的 API Key：
+  - [Anthropic API Key](https://console.anthropic.com/)（Claude 模型）
+  - [Google AI API Key](https://aistudio.google.com/)（Gemini 模型）
+  - [OpenAI API Key](https://platform.openai.com/)（GPT 模型）
 
 ### 安装
 
@@ -37,7 +43,7 @@ pip install -r requirements.txt
 
 # 配置 API Key
 cp .env.example .env
-# 编辑 .env，填入你的 ANTHROPIC_API_KEY
+# 编辑 .env，填入你需要的 API Key（至少配置一个）
 ```
 
 ### 使用
@@ -63,6 +69,12 @@ python main.py -i 转录文本.txt -m claude-sonnet-4-5-20250929
 
 # 使用 Gemini 模型
 python main.py -i 转录文本.txt -m gemini-3-pro-preview
+
+# 使用 GPT 模型
+python main.py -i 转录文本.txt -m gpt-4o
+
+# 使用 OpenAI 兼容代理（如第三方 Claude 代理）
+python main.py -i 转录文本.txt -m claude-sonnet-4-5-20250929
 ```
 
 ### CLI 参数
@@ -72,7 +84,7 @@ python main.py -i 转录文本.txt -m gemini-3-pro-preview
 | `-i, --input` | 输入转录文本文件路径 | ✓ | — |
 | `-o, --output` | 输出 Markdown 文件路径 | | 自动生成 |
 | `-s, --subject` | 课程学科 | | — |
-| `-m, --model` | 模型名称（支持 Claude / Gemini） | | 环境变量 `ANTHROPIC_MODEL` 或 `claude-sonnet-4-5-20250929` |
+| `-m, --model` | 模型名称（支持 Claude / Gemini / GPT） | | 环境变量 `ANTHROPIC_MODEL` / `GEMINI_MODEL` / `GPT_MODEL` 或 `claude-sonnet-4-5-20250929` |
 | `--save-json` | 同时保存 JSON 输出 | | `false` |
 
 ## 工作原理
@@ -87,7 +99,7 @@ python main.py -i 转录文本.txt -m gemini-3-pro-preview
        │
        ▼
 ┌──────────────┐
-│  Claude API  │  使用系统提示词指导结构化输出
+│  LLM API     │  Claude / Gemini / GPT，使用系统提示词指导结构化输出
 └──────┬───────┘
        │
        ▼
@@ -138,7 +150,9 @@ lecture2note/
 
 ## 技术栈
 
-- [Anthropic Python SDK](https://github.com/anthropics/anthropic-sdk-python) — Claude API 调用
+- [Anthropic Python SDK](https://github.com/anthropics/anthropic-sdk-python) — Claude API 调用（支持原生 API 和 OpenAI 兼容代理）
+- [Google GenAI SDK](https://github.com/googleapis/python-genai) — Gemini API 调用
+- [OpenAI Python SDK](https://github.com/openai/openai-python) — GPT API 调用及 OpenAI 兼容接口
 - [Click](https://click.palletsprojects.com/) — CLI 框架
 - [python-dotenv](https://github.com/theskumar/python-dotenv) — 环境变量管理
 
