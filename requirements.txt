@@ -3,3 +3,4 @@ google-genai
 openai
 python-dotenv
 click
+youtube-transcript-api

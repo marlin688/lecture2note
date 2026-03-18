@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 from src.noter import process_transcript
 from src.assembler import assemble_markdown
+from src.transcriber import fetch_transcript, save_transcript
 
 load_dotenv()
 
@@ -22,22 +23,39 @@ def _slugify(text: str) -> str:
 
 
 @click.command()
-@click.option("-i", "--input", "input_path", required=True, type=click.Path(exists=True), help="输入 txt 文件路径")
+@click.option("-i", "--input", "input_path", default=None, type=click.Path(exists=True), help="输入 txt 文件路径")
+@click.option("-u", "--url", "youtube_url", default=None, help="YouTube 视频 URL（自动提取 Transcript）")
 @click.option("-o", "--output", "output_path", default=None, type=click.Path(), help="输出 md 文件路径")
 @click.option("-s", "--subject", default="", help="课程学科")
 @click.option("-m", "--model", default=None, help="模型名称（默认读取环境变量 ANTHROPIC_MODEL / GEMINI_MODEL）")
 @click.option("--save-json", is_flag=True, help="同时保存中间 JSON")
-def main(input_path, output_path, subject, model, save_json):
+@click.option("--transcript-only", is_flag=True, help="仅提取 Transcript，不生成笔记")
+def main(input_path, youtube_url, output_path, subject, model, save_json, transcript_only):
     """Lecture2Note - 将课堂录音转写文本整理为结构化笔记"""
-    # 0. 确定模型：优先命令行参数 > 环境变量 > 硬编码默认
+    # 0. 参数校验：-i 和 -u 必须提供其一
+    if not input_path and not youtube_url:
+        raise click.UsageError("请通过 -i 指定输入文件或通过 -u 指定 YouTube 视频 URL")
+
+    # 0.1 如果提供了 YouTube URL，先提取 Transcript
+    if youtube_url:
+        click.echo(f"🎬 正在从 YouTube 提取 Transcript...")
+        video_id, transcript = fetch_transcript(youtube_url)
+        txt_path = save_transcript(video_id, transcript)
+        click.echo(f"📄 Transcript 已保存: {txt_path}")
+        if transcript_only:
+            return
+    else:
+        transcript = Path(input_path).read_text(encoding="utf-8")
+
+    # 0.2 确定模型：优先命令行参数 > 环境变量 > 硬编码默认
     if model is None:
         model = os.environ.get("ANTHROPIC_MODEL") or os.environ.get("GEMINI_MODEL") or os.environ.get("GPT_MODEL") or "claude-sonnet-4-5-20250929"
 
-    # 1. 读取输入
-    transcript = Path(input_path).read_text(encoding="utf-8")
+    # 1. 读取输入统计
     char_count = len(transcript)
     line_count = transcript.count("\n") + 1
-    click.echo(f"📄 已读取: {input_path}")
+    source = youtube_url or input_path
+    click.echo(f"📄 输入来源: {source}")
     click.echo(f"   字符数: {char_count}  行数: {line_count}")
 
     # 2. 调用 API 生成笔记

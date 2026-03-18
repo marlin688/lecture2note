@@ -16,6 +16,7 @@
 - **长文本分片** — 超长转录文本自动分片处理并智能合并去重
 - **多模型支持** — 支持 Claude、Gemini、GPT 系列模型，自动选择对应 API
 - **自动续写** — 输出被截断时自动续写，确保完整输出
+- **YouTube 字幕提取** — 输入 YouTube 视频 URL，自动提取 Transcript 作为笔记来源
 
 ## 快速开始
 
@@ -75,24 +76,37 @@ python main.py -i 转录文本.txt -m gpt-4o
 
 # 使用 OpenAI 兼容代理（如第三方 Claude 代理）
 python main.py -i 转录文本.txt -m claude-sonnet-4-5-20250929
+
+# 从 YouTube 视频提取字幕并生成笔记
+python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" -s "计算机科学"
+
+# 仅提取 YouTube 字幕，不生成笔记（保存到 output/transcript/）
+python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --transcript-only
 ```
 
 ### CLI 参数
 
 | 参数 | 说明 | 必填 | 默认值 |
 |------|------|:----:|--------|
-| `-i, --input` | 输入转录文本文件路径 | ✓ | — |
+| `-i, --input` | 输入转录文本文件路径（与 `-u` 二选一） | | — |
+| `-u, --url` | YouTube 视频 URL（与 `-i` 二选一） | | — |
 | `-o, --output` | 输出 Markdown 文件路径 | | 自动生成 |
 | `-s, --subject` | 课程学科 | | — |
 | `-m, --model` | 模型名称（支持 Claude / Gemini / GPT） | | 环境变量 `ANTHROPIC_MODEL` / `GEMINI_MODEL` / `GPT_MODEL` 或 `claude-sonnet-4-5-20250929` |
 | `--save-json` | 同时保存 JSON 输出 | | `false` |
+| `--transcript-only` | 仅提取 YouTube 字幕，不生成笔记 | | `false` |
 
 ## 工作原理
 
 ```
-转录文本 (.txt)
+YouTube URL / 转录文本 (.txt)
     │
     ▼
+┌──────────────┐
+│  字幕提取     │  YouTube 视频自动提取 Transcript（可选）
+└──────┬───────┘
+       │
+       ▼
 ┌──────────────┐
 │  文本分片     │  超过 80,000 字符时按段落边界智能切分
 └──────┬───────┘
@@ -131,10 +145,13 @@ lecture2note/
 ├── .env.example         # 环境变量模板
 ├── src/
 │   ├── noter.py         # 核心处理：分片、调用 API、解析、合并
-│   └── assembler.py     # JSON → Markdown 格式转换
+│   ├── assembler.py     # JSON → Markdown 格式转换
+│   └── transcriber.py   # YouTube Transcript 提取
 ├── prompts/
 │   └── note_system.md   # Claude 系统提示词
-└── output/              # 输出目录（已 gitignore）
+└── output/
+    ├── transcript/      # YouTube 字幕提取结果
+    └── *.md             # 生成的笔记
 ```
 
 ## 输出示例
@@ -154,6 +171,7 @@ lecture2note/
 - [Google GenAI SDK](https://github.com/googleapis/python-genai) — Gemini API 调用
 - [OpenAI Python SDK](https://github.com/openai/openai-python) — GPT API 调用及 OpenAI 兼容接口
 - [Click](https://click.palletsprojects.com/) — CLI 框架
+- [youtube-transcript-api](https://github.com/jdepoix/youtube-transcript-api) — YouTube 字幕提取
 - [python-dotenv](https://github.com/theskumar/python-dotenv) — 环境变量管理
 
 ## License

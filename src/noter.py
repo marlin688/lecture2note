@@ -16,7 +16,7 @@ from openai import OpenAI
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
-MAX_CHUNK_CHARS = 4_000
+MAX_CHUNK_CHARS = 8_000
 
 
 def load_system_prompt() -> str:
