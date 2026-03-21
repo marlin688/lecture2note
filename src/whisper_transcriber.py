@@ -1,32 +1,51 @@
-"""使用 Whisper 本地模型转录音频为 SRT 字幕。"""
+"""使用 mlx-whisper (Apple Silicon GPU 加速) 转录音频为 SRT 字幕。"""
 
 from pathlib import Path
 
 import click
-import whisper
+import mlx_whisper
+
+# mlx-whisper 模型名映射到 HuggingFace 路径
+_MLX_MODELS = {
+    "tiny": "mlx-community/whisper-tiny-mlx",
+    "base": "mlx-community/whisper-base-mlx-q4",
+    "small": "mlx-community/whisper-small-mlx",
+    "medium": "mlx-community/whisper-medium-mlx",
+    "large": "mlx-community/whisper-large-v3-mlx",
+}
 
 
 def transcribe_to_srt(audio_path: str, model_name: str = "medium") -> str:
-    """用 Whisper 转录音频文件，输出 SRT 格式字符串。
+    """用 mlx-whisper 转录音频文件（Apple Silicon GPU 加速），输出 SRT 格式字符串。
 
     Args:
         audio_path: 音频文件路径
-        model_name: Whisper 模型名称 (tiny/base/small/medium/large)
+        model_name: 模型名称 (tiny/base/small/medium/large)
 
     Returns:
         SRT 格式字符串
     """
-    click.echo(f"   🔄 加载 Whisper {model_name} 模型...")
-    model = whisper.load_model(model_name)
+    model_path = _MLX_MODELS.get(model_name, model_name)
+    click.echo(f"   🔄 使用 mlx-whisper {model_name} 模型 (GPU 加速)...")
 
-    click.echo(f"   🎙️ 正在转录 (这可能需要几分钟)...")
-    result = model.transcribe(
-        audio_path,
-        language="en",
-        verbose=False,
-    )
+    click.echo(f"   🎙️ 正在转录...")
+    # 临时清除代理环境变量，防止 HuggingFace Hub 读取 SOCKS 代理报错
+    import os
+    proxy_vars = {}
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        if key in os.environ:
+            proxy_vars[key] = os.environ.pop(key)
+    try:
+        result = mlx_whisper.transcribe(
+            audio_path,
+            path_or_hf_repo=model_path,
+            language="en",
+            verbose=False,
+        )
+    finally:
+        os.environ.update(proxy_vars)
 
-    # 将 Whisper segments 转为 SRT
+    # 将 segments 转为 SRT
     srt_lines = []
     for i, seg in enumerate(result["segments"]):
         idx = i + 1

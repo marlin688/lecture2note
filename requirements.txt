@@ -5,4 +5,4 @@ python-dotenv
 click
 youtube-transcript-api
 yt-dlp
-openai-whisper
+mlx-whisper
