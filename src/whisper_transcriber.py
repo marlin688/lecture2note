@@ -94,8 +94,24 @@ def download_audio(url: str, output_dir: Path) -> Path:
     click.echo("   📥 正在下载音频...")
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
-        # 找到实际下载的文件
         ext = info.get("ext", "m4a")
+
+    # 下载封面
+    thumbnail_url = info.get("thumbnail")
+    if thumbnail_url:
+        try:
+            import httpx
+            resp = httpx.get(thumbnail_url, follow_redirects=True, timeout=30)
+            if resp.status_code == 200:
+                # 根据 content-type 确定扩展名
+                ct = resp.headers.get("content-type", "")
+                ext_map = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+                img_ext = ext_map.get(ct, ".jpg")
+                cover_path = output_dir / f"cover{img_ext}"
+                cover_path.write_bytes(resp.content)
+                click.echo(f"   🖼️ 封面已保存: {cover_path}")
+        except Exception as e:
+            click.echo(f"   ⚠️ 封面下载失败: {e}")
 
     audio_path = output_dir / f"audio.{ext}"
     if audio_path.exists():
