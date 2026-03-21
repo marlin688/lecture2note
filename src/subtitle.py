@@ -475,6 +475,16 @@ def generate_subtitle(
         video_dir = SUBTITLE_DIR / video_id
         audio_path = download_audio(url, video_dir)
 
+        # 同时保存 YouTube 原始字幕（如果有的话）
+        try:
+            _, snippets, _ = fetch_subtitle_snippets(url)
+            youtube_srt = snippets_to_srt(snippets)
+            youtube_path = video_dir / "subtitle_en_youtube.srt"
+            youtube_path.write_text(youtube_srt, encoding="utf-8")
+            click.echo(f"   📄 YouTube 原始字幕已保存: {youtube_path}")
+        except Exception:
+            click.echo("   ℹ️ YouTube 字幕不可用，跳过")
+
         en_srt = transcribe_to_srt(str(audio_path), model_name=whisper_model)
     else:
         # YouTube 字幕回退路径
