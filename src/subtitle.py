@@ -491,8 +491,12 @@ def generate_subtitle(
             en_srt = snippets_to_srt(snippets)
             click.echo("   ✓ 人工字幕，无需合并")
 
+    # 输出目录：Whisper 模式放在 video_dir 下，YouTube 模式放在 SUBTITLE_DIR 下
+    out_dir = SUBTITLE_DIR / video_id if use_whisper else SUBTITLE_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     # 保存英文 SRT
-    en_path = SUBTITLE_DIR / f"{video_id}_en.srt"
+    en_path = out_dir / "subtitle_en.srt"
     en_path.write_text(en_srt, encoding="utf-8")
     click.echo(f"   📄 英文字幕已保存: {en_path}")
 
@@ -505,7 +509,7 @@ def generate_subtitle(
     translated_srt = translate_srt(en_srt, model, mode=target_lang)
 
     suffix = "_zh" if target_lang == "zh" else "_bilingual"
-    out_path = SUBTITLE_DIR / f"{video_id}{suffix}.srt"
+    out_path = out_dir / f"subtitle{suffix}.srt"
     normalized = _normalize_srt(translated_srt, en_srt)
     out_path.write_text(normalized, encoding="utf-8")
     click.echo(f"   📄 {label}字幕已保存: {out_path}")
