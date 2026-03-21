@@ -36,13 +36,41 @@ def _format_srt_time(seconds: float) -> str:
 def fetch_subtitle_snippets(url: str, languages: tuple[str, ...] = ("en",)):
     """获取 YouTube 视频的字幕片段（带时间戳）。
 
+    优先获取人工字幕，没有时才回退到自动生成字幕。
+
     Returns:
-        (video_id, list of snippets with .text, .start, .duration)
+        (video_id, snippets, is_generated)
     """
     video_id = extract_video_id(url)
     api = YouTubeTranscriptApi()
-    transcript = api.fetch(video_id, languages=languages)
-    return video_id, transcript.snippets
+    transcript_list = api.list(video_id)
+
+    # 按语言优先级查找，优先人工字幕
+    manual = None
+    generated = None
+    for lang in languages:
+        for t in transcript_list:
+            if t.language_code == lang:
+                if not t.is_generated:
+                    manual = t
+                    break
+                elif generated is None:
+                    generated = t
+        if manual:
+            break
+
+    chosen = manual or generated
+    if chosen is None:
+        # 回退到默认 fetch
+        transcript = api.fetch(video_id, languages=languages)
+        is_generated = True
+    else:
+        transcript = chosen.fetch()
+        is_generated = chosen.is_generated
+        label = "自动生成" if is_generated else "人工"
+        click.echo(f"   ℹ️ 使用{label}字幕 ({chosen.language})")
+
+    return video_id, transcript.snippets, is_generated
 
 
 def snippets_to_srt(snippets) -> str:
@@ -351,23 +379,32 @@ def generate_subtitle(url: str, model: str, target_lang: str = "zh") -> Path:
         输出的 SRT 文件路径
     """
     click.echo("🎬 正在提取英文字幕...")
-    video_id, snippets = fetch_subtitle_snippets(url)
+    video_id, snippets, is_generated = fetch_subtitle_snippets(url)
     click.echo(f"   ✓ 获取到 {len(snippets)} 条字幕片段")
 
     SUBTITLE_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 1. 保存原始碎片英文 SRT
+    # 1. 保存原始英文 SRT
     raw_en_srt = snippets_to_srt(snippets)
-    raw_en_path = SUBTITLE_DIR / f"{video_id}_en_raw.srt"
-    raw_en_path.write_text(raw_en_srt, encoding="utf-8")
-    click.echo(f"   📄 原始英文字幕已保存: {raw_en_path}")
+    if is_generated:
+        raw_en_path = SUBTITLE_DIR / f"{video_id}_en_raw.srt"
+        raw_en_path.write_text(raw_en_srt, encoding="utf-8")
+        click.echo(f"   📄 原始英文字幕已保存: {raw_en_path}")
+    else:
+        en_path = SUBTITLE_DIR / f"{video_id}_en.srt"
+        en_path.write_text(raw_en_srt, encoding="utf-8")
+        click.echo(f"   📄 英文字幕已保存: {en_path}")
 
-    # 2. 合并碎片为完整句子
-    merged = merge_subtitle_fragments(snippets)
-    merged_en_srt = merged_entries_to_srt(merged)
-    merged_en_path = SUBTITLE_DIR / f"{video_id}_en.srt"
-    merged_en_path.write_text(merged_en_srt, encoding="utf-8")
-    click.echo(f"   ✓ 合并为 {len(merged)} 条完整字幕: {merged_en_path}")
+    # 2. 合并碎片为完整句子（仅自动生成字幕需要合并，人工字幕断句已合理）
+    if is_generated:
+        merged = merge_subtitle_fragments(snippets)
+        merged_en_srt = merged_entries_to_srt(merged)
+        merged_en_path = SUBTITLE_DIR / f"{video_id}_en.srt"
+        merged_en_path.write_text(merged_en_srt, encoding="utf-8")
+        click.echo(f"   ✓ 合并为 {len(merged)} 条完整字幕: {merged_en_path}")
+    else:
+        merged_en_srt = raw_en_srt
+        click.echo("   ✓ 人工字幕，无需合并")
 
     if target_lang == "en":
         return merged_en_path
