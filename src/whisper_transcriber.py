@@ -41,6 +41,8 @@ def transcribe_to_srt(audio_path: str, model_name: str = "medium") -> str:
             path_or_hf_repo=model_path,
             language="en",
             verbose=False,
+            condition_on_previous_text=False,  # 防止音乐片段"污染"后续转录
+            no_speech_threshold=0.6,           # 更积极地检测语音
         )
     finally:
         os.environ.update(proxy_vars)

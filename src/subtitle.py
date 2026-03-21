@@ -476,6 +476,7 @@ def generate_subtitle(
         audio_path = download_audio(url, video_dir)
 
         # 同时保存 YouTube 原始字幕（如果有的话）
+        youtube_srt = None
         try:
             _, snippets, _ = fetch_subtitle_snippets(url)
             youtube_srt = snippets_to_srt(snippets)
@@ -486,6 +487,13 @@ def generate_subtitle(
             click.echo("   ℹ️ YouTube 字幕不可用，跳过")
 
         en_srt = transcribe_to_srt(str(audio_path), model_name=whisper_model)
+
+        # 质量检测：如果 Whisper 结果大量空条目，自动回退到 YouTube 字幕
+        srt_entries = re.split(r"\n\n+", en_srt.strip())
+        non_empty = sum(1 for e in srt_entries if len(e.strip().split("\n")) >= 3 and e.strip().split("\n")[2].strip())
+        if non_empty < 5 and youtube_srt:
+            click.echo(f"   ⚠️ Whisper 转录质量不佳（仅 {non_empty} 条有效），回退到 YouTube 字幕")
+            en_srt = youtube_srt
     else:
         # YouTube 字幕回退路径
         click.echo("🎬 YouTube 字幕模式")
