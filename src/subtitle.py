@@ -15,8 +15,13 @@ PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 SUBTITLE_DIR = Path("output/subtitle")
 
 # 每批发送给 LLM 翻译的 SRT 条目数
-BATCH_ENTRIES = 150
+BATCH_ENTRIES = 100
 MAX_CONCURRENT = 4
+
+# 碎片合并参数
+MERGE_MAX_DURATION = 10.0   # 合并后单条字幕最大时长（秒）
+MERGE_MAX_CHARS = 80        # 合并后单条字幕最大英文字符数
+MERGE_GAP_THRESHOLD = 1.5   # 超过此间隔（秒）强制分段
 
 
 def _format_srt_time(seconds: float) -> str:
@@ -50,6 +55,91 @@ def snippets_to_srt(snippets) -> str:
         lines.append(f"{idx}")
         lines.append(f"{start} --> {end}")
         lines.append(snippet.text)
+        lines.append("")
+    return "\n".join(lines)
+
+
+from dataclasses import dataclass
+
+
+@dataclass
+class MergedEntry:
+    start: float
+    end: float
+    text: str
+
+
+def merge_subtitle_fragments(snippets) -> list[MergedEntry]:
+    """将 YouTube 自动字幕的碎片合并为完整句子级条目。
+
+    合并策略：
+    - 连续碎片如果时间重叠或间隔 < GAP_THRESHOLD 秒，则合并
+    - 遇到句末标点（. ? !）且已有一定长度时终止当前组
+    - 超过 MAX_DURATION 或 MAX_CHARS 时强制终止
+    """
+    if not snippets:
+        return []
+
+    merged = []
+    cur_start = snippets[0].start
+    cur_end = snippets[0].start + snippets[0].duration
+    cur_texts = [snippets[0].text]
+
+    for i in range(1, len(snippets)):
+        s = snippets[i]
+        s_end = s.start + s.duration
+        gap = s.start - cur_end
+        cur_text_joined = " ".join(cur_texts)
+        cur_duration = cur_end - cur_start
+
+        # 判断是否应该开始新组
+        should_break = False
+
+        # 时间间隔过大 → 说话人停顿或换人
+        if gap >= MERGE_GAP_THRESHOLD:
+            should_break = True
+
+        # 已超过时长或字符限制
+        if cur_duration >= MERGE_MAX_DURATION or len(cur_text_joined) >= MERGE_MAX_CHARS:
+            should_break = True
+
+        # 前一条以句末标点结尾且已有一定长度
+        if (cur_texts[-1].rstrip().endswith((".", "?", "!"))
+                and len(cur_text_joined) > 30):
+            should_break = True
+
+        if should_break:
+            merged.append(MergedEntry(
+                start=cur_start, end=cur_end,
+                text=" ".join(cur_texts).strip(),
+            ))
+            cur_start = s.start
+            cur_end = s_end
+            cur_texts = [s.text]
+        else:
+            cur_end = max(cur_end, s_end)
+            cur_texts.append(s.text)
+
+    # 最后一组
+    if cur_texts:
+        merged.append(MergedEntry(
+            start=cur_start, end=cur_end,
+            text=" ".join(cur_texts).strip(),
+        ))
+
+    return merged
+
+
+def merged_entries_to_srt(entries: list[MergedEntry]) -> str:
+    """将合并后的条目转为 SRT 格式。"""
+    lines = []
+    for i, entry in enumerate(entries):
+        idx = i + 1
+        start = _format_srt_time(entry.start)
+        end = _format_srt_time(entry.end)
+        lines.append(f"{idx}")
+        lines.append(f"{start} --> {end}")
+        lines.append(entry.text)
         lines.append("")
     return "\n".join(lines)
 
@@ -264,25 +354,33 @@ def generate_subtitle(url: str, model: str, target_lang: str = "zh") -> Path:
     video_id, snippets = fetch_subtitle_snippets(url)
     click.echo(f"   ✓ 获取到 {len(snippets)} 条字幕片段")
 
-    # 生成并保存英文 SRT
     SUBTITLE_DIR.mkdir(parents=True, exist_ok=True)
-    en_srt = snippets_to_srt(snippets)
-    en_path = SUBTITLE_DIR / f"{video_id}_en.srt"
-    en_path.write_text(en_srt, encoding="utf-8")
-    click.echo(f"   📄 英文字幕已保存: {en_path}")
+
+    # 1. 保存原始碎片英文 SRT
+    raw_en_srt = snippets_to_srt(snippets)
+    raw_en_path = SUBTITLE_DIR / f"{video_id}_en_raw.srt"
+    raw_en_path.write_text(raw_en_srt, encoding="utf-8")
+    click.echo(f"   📄 原始英文字幕已保存: {raw_en_path}")
+
+    # 2. 合并碎片为完整句子
+    merged = merge_subtitle_fragments(snippets)
+    merged_en_srt = merged_entries_to_srt(merged)
+    merged_en_path = SUBTITLE_DIR / f"{video_id}_en.srt"
+    merged_en_path.write_text(merged_en_srt, encoding="utf-8")
+    click.echo(f"   ✓ 合并为 {len(merged)} 条完整字幕: {merged_en_path}")
 
     if target_lang == "en":
-        return en_path
+        return merged_en_path
 
-    # 翻译
+    # 3. 翻译合并后的 SRT（中英文时间轴一致）
     label = "中文" if target_lang == "zh" else "中英双语"
     click.echo(f"🌐 正在生成{label}字幕 (模型: {model})...")
-    translated_srt = translate_srt(en_srt, model, mode=target_lang)
+    translated_srt = translate_srt(merged_en_srt, model, mode=target_lang)
 
     suffix = "_zh" if target_lang == "zh" else "_bilingual"
     out_path = SUBTITLE_DIR / f"{video_id}{suffix}.srt"
-    # 用原版英文时间戳修复翻译后可能损坏的时间戳
-    normalized = _normalize_srt(translated_srt, en_srt)
+    # 用合并后的英文时间戳修复翻译后可能损坏的时间戳
+    normalized = _normalize_srt(translated_srt, merged_en_srt)
     out_path.write_text(normalized, encoding="utf-8")
     click.echo(f"   📄 {label}字幕已保存: {out_path}")
 
