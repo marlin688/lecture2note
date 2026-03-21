@@ -4,3 +4,4 @@ openai
 python-dotenv
 click
 youtube-transcript-api
+yt-dlp

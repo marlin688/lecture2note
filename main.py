@@ -9,6 +9,8 @@ from dotenv import load_dotenv
 from src.noter import process_transcript
 from src.assembler import assemble_markdown
 from src.transcriber import fetch_transcript, save_transcript
+from src.subtitle import generate_subtitle
+from src.downloader import print_formats
 
 load_dotenv()
 
@@ -30,11 +32,35 @@ def _slugify(text: str) -> str:
 @click.option("-m", "--model", default=None, help="模型名称（默认读取环境变量 ANTHROPIC_MODEL / GEMINI_MODEL）")
 @click.option("--save-json", is_flag=True, help="同时保存中间 JSON")
 @click.option("--transcript-only", is_flag=True, help="仅提取 Transcript，不生成笔记")
-def main(input_path, youtube_url, output_path, subject, model, save_json, transcript_only):
+@click.option("--subtitle", "subtitle_lang", default=None, type=click.Choice(["bilingual", "en"]), help="生成字幕文件（bilingual=中英双语, en=英文原文）")
+@click.option("--list-formats", "list_fmts", is_flag=True, help="列出视频可用的下载格式和地址")
+def main(input_path, youtube_url, output_path, subject, model, save_json, transcript_only, subtitle_lang, list_fmts):
     """Lecture2Note - 将课堂录音转写文本整理为结构化笔记"""
-    # 0. 参数校验：-i 和 -u 必须提供其一
+    # 0. 参数校验
     if not input_path and not youtube_url:
         raise click.UsageError("请通过 -i 指定输入文件或通过 -u 指定 YouTube 视频 URL")
+
+    # 0.0 列出下载格式（独立功能，不需要其他参数）
+    if list_fmts:
+        if not youtube_url:
+            raise click.UsageError("--list-formats 需要通过 -u 指定 YouTube 视频 URL")
+        print_formats(youtube_url)
+        return
+
+    # 0.0.1 生成字幕（独立功能）
+    if subtitle_lang:
+        if not youtube_url:
+            raise click.UsageError("--subtitle 需要通过 -u 指定 YouTube 视频 URL")
+        if model is None:
+            model = "claude-sonnet-4-5-20250929"
+        srt_path = generate_subtitle(youtube_url, model, target_lang=subtitle_lang)
+        click.echo(f"\n✅ 字幕文件: {srt_path}")
+        # 顺便打印下载地址
+        try:
+            print_formats(youtube_url)
+        except Exception:
+            click.echo("⚠️ 获取下载地址失败（可能未安装 yt-dlp），可手动安装: pip install yt-dlp")
+        return
 
     # 0.1 如果提供了 YouTube URL，先提取 Transcript
     if youtube_url:

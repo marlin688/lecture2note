@@ -17,6 +17,8 @@
 - **多模型支持** — 支持 Claude、Gemini、GPT 系列模型，自动选择对应 API
 - **自动续写** — 输出被截断时自动续写，确保完整输出
 - **YouTube 字幕提取** — 输入 YouTube 视频 URL，自动提取 Transcript 作为笔记来源
+- **中英双语字幕** — 提取英文字幕并通过 LLM 生成中英双语 SRT 字幕文件，4 路并发翻译
+- **视频下载地址** — 列出 YouTube 视频所有分辨率（144p~1080p）的下载格式，方便配合字幕离线观看
 
 ## 快速开始
 
@@ -82,6 +84,15 @@ python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" -s "计算机科学
 
 # 仅提取 YouTube 字幕，不生成笔记（保存到 output/transcript/）
 python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --transcript-only
+
+# 生成中英双语字幕（同时显示视频下载地址）
+python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --subtitle bilingual
+
+# 仅提取英文原版字幕（SRT 格式）
+python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --subtitle en
+
+# 列出视频所有分辨率的下载格式
+python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --list-formats
 ```
 
 ### CLI 参数
@@ -95,6 +106,8 @@ python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --transcript-only
 | `-m, --model` | 模型名称（支持 Claude / Gemini / GPT） | | 环境变量 `ANTHROPIC_MODEL` / `GEMINI_MODEL` / `GPT_MODEL` 或 `claude-sonnet-4-5-20250929` |
 | `--save-json` | 同时保存 JSON 输出 | | `false` |
 | `--transcript-only` | 仅提取 YouTube 字幕，不生成笔记 | | `false` |
+| `--subtitle` | 生成字幕文件（`bilingual`=中英双语, `en`=英文原文） | | — |
+| `--list-formats` | 列出视频可用的下载格式和地址 | | `false` |
 
 ## 工作原理
 
@@ -146,11 +159,15 @@ lecture2note/
 ├── src/
 │   ├── noter.py         # 核心处理：分片、调用 API、解析、合并
 │   ├── assembler.py     # JSON → Markdown 格式转换
-│   └── transcriber.py   # YouTube Transcript 提取
+│   ├── transcriber.py   # YouTube Transcript 提取
+│   ├── subtitle.py      # 字幕提取、翻译与 SRT 生成
+│   └── downloader.py    # YouTube 视频下载地址获取
 ├── prompts/
-│   └── note_system.md   # Claude 系统提示词
+│   ├── note_system.md   # 笔记生成系统提示词
+│   └── translate_system.md  # 字幕翻译系统提示词
 └── output/
     ├── transcript/      # YouTube 字幕提取结果
+    ├── subtitle/        # 生成的字幕文件（SRT）
     └── *.md             # 生成的笔记
 ```
 
@@ -172,6 +189,7 @@ lecture2note/
 - [OpenAI Python SDK](https://github.com/openai/openai-python) — GPT API 调用及 OpenAI 兼容接口
 - [Click](https://click.palletsprojects.com/) — CLI 框架
 - [youtube-transcript-api](https://github.com/jdepoix/youtube-transcript-api) — YouTube 字幕提取
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) — YouTube 视频格式与下载地址获取
 - [python-dotenv](https://github.com/theskumar/python-dotenv) — 环境变量管理
 
 ## License
