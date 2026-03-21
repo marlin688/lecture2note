@@ -54,6 +54,48 @@ def snippets_to_srt(snippets) -> str:
     return "\n".join(lines)
 
 
+def _fix_timestamp(ts_line: str) -> str:
+    """修复 LLM 可能破坏的时间戳格式，确保 HH:MM:SS,mmm --> HH:MM:SS,mmm。"""
+    match = re.match(r"(\d{1,2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{1,2}:\d{2}:\d{2},\d{3})", ts_line)
+    if not match:
+        return ts_line
+    start, end = match.group(1), match.group(2)
+    # 补齐小时位到2位
+    def pad_hours(ts):
+        parts = ts.split(":")
+        parts[0] = parts[0].zfill(2)
+        return ":".join(parts)
+    return f"{pad_hours(start)} --> {pad_hours(end)}"
+
+
+def _normalize_srt(srt_text: str, en_srt: str) -> str:
+    """规范化翻译后的 SRT：修复时间戳、确保条目数与原文一致。"""
+    text = srt_text.replace("\r\n", "\n").replace("\r", "\n")
+    entries = re.split(r"\n\n+", text.strip())
+
+    # 从英文原版提取正确的序号和时间戳
+    en_text = en_srt.replace("\r\n", "\n").replace("\r", "\n")
+    en_entries = re.split(r"\n\n+", en_text.strip())
+
+    fixed = []
+    for i, entry in enumerate(entries):
+        lines = entry.strip().split("\n")
+        if i < len(en_entries):
+            en_lines = en_entries[i].strip().split("\n")
+            # 用原版的序号和时间戳替换，只保留翻译后的文本行
+            seq = en_lines[0]
+            ts = en_lines[1]
+            text_lines = lines[2:]  # 翻译后的文本（可能1行或2行）
+            fixed.append("\n".join([seq, ts] + text_lines))
+        else:
+            # 超出原文条目数的部分，仅修复时间戳
+            if len(lines) >= 2:
+                lines[1] = _fix_timestamp(lines[1])
+            fixed.append("\n".join(lines))
+
+    return "\n\n".join(fixed) + "\n"
+
+
 def _split_srt(srt_text: str, batch_entries: int = BATCH_ENTRIES) -> list[str]:
     """将 SRT 文本按条目数分段。每段包含 batch_entries 个条目。"""
     # SRT 条目之间用空行分隔
@@ -65,8 +107,11 @@ def _split_srt(srt_text: str, batch_entries: int = BATCH_ENTRIES) -> list[str]:
     return chunks
 
 
-def _load_translate_prompt() -> str:
-    prompt_path = PROMPTS_DIR / "translate_system.md"
+def _load_translate_prompt(mode: str = "bilingual") -> str:
+    if mode == "zh":
+        prompt_path = PROMPTS_DIR / "translate_zh_system.md"
+    else:
+        prompt_path = PROMPTS_DIR / "translate_system.md"
     return prompt_path.read_text(encoding="utf-8")
 
 
@@ -179,12 +224,13 @@ def _translate_one_chunk(args: tuple) -> tuple[int, str]:
     return chunk_idx, text
 
 
-def translate_srt(en_srt: str, model: str) -> str:
-    """将英文 SRT 并发翻译为中文 SRT。
+def translate_srt(en_srt: str, model: str, mode: str = "bilingual") -> str:
+    """将英文 SRT 并发翻译为中文/双语 SRT。
 
-    直接把 SRT 分段发给 LLM，保留格式只翻译文本行。
+    Args:
+        mode: "zh" 纯中文, "bilingual" 中英双语
     """
-    system_prompt = _load_translate_prompt()
+    system_prompt = _load_translate_prompt(mode)
     chunks = _split_srt(en_srt)
     total_chunks = len(chunks)
 
@@ -205,11 +251,11 @@ def translate_srt(en_srt: str, model: str) -> str:
     return "\n\n".join(results)
 
 
-def generate_subtitle(url: str, model: str, target_lang: str = "bilingual") -> Path:
-    """主流程：提取英文字幕 → 翻译为双语 → 输出 SRT 文件。
+def generate_subtitle(url: str, model: str, target_lang: str = "zh") -> Path:
+    """主流程：提取英文字幕 → 翻译 → 输出 SRT 文件。
 
     Args:
-        target_lang: "en" 仅英文, "bilingual" 中英双语
+        target_lang: "en" 仅英文, "zh" 纯中文, "bilingual" 中英双语
 
     Returns:
         输出的 SRT 文件路径
@@ -228,12 +274,16 @@ def generate_subtitle(url: str, model: str, target_lang: str = "bilingual") -> P
     if target_lang == "en":
         return en_path
 
-    # 翻译为中英双语 SRT
-    click.echo(f"🌐 正在生成中英双语字幕 (模型: {model})...")
-    bilingual_srt = translate_srt(en_srt, model)
+    # 翻译
+    label = "中文" if target_lang == "zh" else "中英双语"
+    click.echo(f"🌐 正在生成{label}字幕 (模型: {model})...")
+    translated_srt = translate_srt(en_srt, model, mode=target_lang)
 
-    bilingual_path = SUBTITLE_DIR / f"{video_id}_bilingual.srt"
-    bilingual_path.write_text(bilingual_srt, encoding="utf-8")
-    click.echo(f"   📄 双语字幕已保存: {bilingual_path}")
+    suffix = "_zh" if target_lang == "zh" else "_bilingual"
+    out_path = SUBTITLE_DIR / f"{video_id}{suffix}.srt"
+    # 用原版英文时间戳修复翻译后可能损坏的时间戳
+    normalized = _normalize_srt(translated_srt, en_srt)
+    out_path.write_text(normalized, encoding="utf-8")
+    click.echo(f"   📄 {label}字幕已保存: {out_path}")
 
-    return bilingual_path
+    return out_path

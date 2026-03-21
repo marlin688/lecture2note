@@ -32,7 +32,7 @@ def _slugify(text: str) -> str:
 @click.option("-m", "--model", default=None, help="模型名称（默认读取环境变量 ANTHROPIC_MODEL / GEMINI_MODEL）")
 @click.option("--save-json", is_flag=True, help="同时保存中间 JSON")
 @click.option("--transcript-only", is_flag=True, help="仅提取 Transcript，不生成笔记")
-@click.option("--subtitle", "subtitle_lang", default=None, type=click.Choice(["bilingual", "en"]), help="生成字幕文件（bilingual=中英双语, en=英文原文）")
+@click.option("--subtitle", "subtitle_lang", default=None, type=click.Choice(["zh", "bilingual", "en"]), help="生成字幕文件（zh=中文, bilingual=中英双语, en=英文原文）")
 @click.option("--list-formats", "list_fmts", is_flag=True, help="列出视频可用的下载格式和地址")
 def main(input_path, youtube_url, output_path, subject, model, save_json, transcript_only, subtitle_lang, list_fmts):
     """Lecture2Note - 将课堂录音转写文本整理为结构化笔记"""
