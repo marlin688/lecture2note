@@ -34,7 +34,9 @@ def _slugify(text: str) -> str:
 @click.option("--transcript-only", is_flag=True, help="仅提取 Transcript，不生成笔记")
 @click.option("--subtitle", "subtitle_lang", default=None, type=click.Choice(["zh", "bilingual", "en"]), help="生成字幕文件（zh=中文, bilingual=中英双语, en=英文原文）")
 @click.option("--list-formats", "list_fmts", is_flag=True, help="列出视频可用的下载格式和地址")
-def main(input_path, youtube_url, output_path, subject, model, save_json, transcript_only, subtitle_lang, list_fmts):
+@click.option("--whisper-model", default="medium", type=click.Choice(["tiny", "base", "small", "medium", "large"]), help="Whisper 模型 (默认 medium)")
+@click.option("--no-whisper", is_flag=True, help="不使用 Whisper，回退到 YouTube 字幕")
+def main(input_path, youtube_url, output_path, subject, model, save_json, transcript_only, subtitle_lang, list_fmts, whisper_model, no_whisper):
     """Lecture2Note - 将课堂录音转写文本整理为结构化笔记"""
     # 0. 参数校验
     if not input_path and not youtube_url:
@@ -53,7 +55,12 @@ def main(input_path, youtube_url, output_path, subject, model, save_json, transc
             raise click.UsageError("--subtitle 需要通过 -u 指定 YouTube 视频 URL")
         if model is None:
             model = "claude-sonnet-4-5-20250929"
-        srt_path = generate_subtitle(youtube_url, model, target_lang=subtitle_lang)
+        srt_path = generate_subtitle(
+            youtube_url, model,
+            target_lang=subtitle_lang,
+            use_whisper=not no_whisper,
+            whisper_model=whisper_model,
+        )
         click.echo(f"\n✅ 字幕文件: {srt_path}")
         # 顺便打印下载地址
         try:
