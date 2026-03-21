@@ -15,6 +15,7 @@ def list_formats(url: str) -> list[dict]:
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
+        "extractor_args": {"youtube": {"js_runtimes": ["nodejs"]}},
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)

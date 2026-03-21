@@ -88,6 +88,7 @@ def download_audio(url: str, output_dir: Path) -> Path:
         "outtmpl": output_template,
         "quiet": True,
         "no_warnings": True,
+        "extractor_args": {"youtube": {"js_runtimes": ["nodejs"]}},
     }
 
     click.echo("   📥 正在下载音频...")
