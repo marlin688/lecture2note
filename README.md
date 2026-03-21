@@ -17,16 +17,20 @@
 - **多模型支持** — 支持 Claude、Gemini、GPT 系列模型，自动选择对应 API
 - **自动续写** — 输出被截断时自动续写，确保完整输出
 - **YouTube 字幕提取** — 输入 YouTube 视频 URL，自动提取 Transcript 作为笔记来源
-- **中英双语字幕** — 提取英文字幕并通过 LLM 生成中英双语 SRT 字幕文件，4 路并发翻译
-- **视频下载地址** — 列出 YouTube 视频所有分辨率（144p~1080p）的下载格式，方便配合字幕离线观看
+- **Whisper 本地转录** — 使用 mlx-whisper（Apple Silicon GPU 加速）从视频音频转录高质量英文字幕，断句准确、自带标点
+- **字幕翻译** — 支持中文（`zh`）和中英双语（`bilingual`）两种字幕输出，4 路并发翻译
+- **YouTube 字幕回退** — 无需 Whisper 时可通过 `--no-whisper` 使用 YouTube 原始字幕，优先人工字幕
+- **视频下载地址** — 列出 YouTube 视频所有分辨率的下载格式，方便配合字幕离线观看
 
 ## 快速开始
 
 ### 环境要求
 
 - Python 3.12+
+- Apple Silicon Mac（M1/M2/M3/M4）推荐，mlx-whisper 可 GPU 加速
+- ffmpeg（`brew install ffmpeg`，用于 yt-dlp 音频提取）
 - 至少一个 AI 模型的 API Key：
-  - [Anthropic API Key](https://console.anthropic.com/)（Claude 模型）
+  - [Anthropic API Key](https://console.anthropic.com/)（Claude 模型，字幕翻译默认使用）
   - [Google AI API Key](https://aistudio.google.com/)（Gemini 模型）
   - [OpenAI API Key](https://platform.openai.com/)（GPT 模型）
 
@@ -85,11 +89,20 @@ python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" -s "计算机科学
 # 仅提取 YouTube 字幕，不生成笔记（保存到 output/transcript/）
 python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --transcript-only
 
-# 生成中英双语字幕（同时显示视频下载地址）
+# Whisper 转录 + 中文翻译（默认，推荐）
+python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --subtitle zh
+
+# Whisper 转录 + 中英双语字幕
 python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --subtitle bilingual
 
-# 仅提取英文原版字幕（SRT 格式）
+# 仅 Whisper 转录英文字幕
 python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --subtitle en
+
+# 使用 Whisper large 模型（更准确，更慢）
+python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --subtitle zh --whisper-model large
+
+# 不使用 Whisper，回退到 YouTube 字幕
+python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --subtitle zh --no-whisper
 
 # 列出视频所有分辨率的下载格式
 python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --list-formats
@@ -106,7 +119,9 @@ python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --list-formats
 | `-m, --model` | 模型名称（支持 Claude / Gemini / GPT） | | 环境变量 `ANTHROPIC_MODEL` / `GEMINI_MODEL` / `GPT_MODEL` 或 `claude-sonnet-4-5-20250929` |
 | `--save-json` | 同时保存 JSON 输出 | | `false` |
 | `--transcript-only` | 仅提取 YouTube 字幕，不生成笔记 | | `false` |
-| `--subtitle` | 生成字幕文件（`bilingual`=中英双语, `en`=英文原文） | | — |
+| `--subtitle` | 生成字幕文件（`zh`=中文, `bilingual`=中英双语, `en`=英文） | | — |
+| `--whisper-model` | Whisper 模型（`tiny`/`base`/`small`/`medium`/`large`） | | `medium` |
+| `--no-whisper` | 不使用 Whisper，回退到 YouTube 字幕 | | `false` |
 | `--list-formats` | 列出视频可用的下载格式和地址 | | `false` |
 
 ## 工作原理
@@ -157,18 +172,24 @@ lecture2note/
 ├── requirements.txt     # Python 依赖
 ├── .env.example         # 环境变量模板
 ├── src/
-│   ├── noter.py         # 核心处理：分片、调用 API、解析、合并
-│   ├── assembler.py     # JSON → Markdown 格式转换
-│   ├── transcriber.py   # YouTube Transcript 提取
-│   ├── subtitle.py      # 字幕提取、翻译与 SRT 生成
-│   └── downloader.py    # YouTube 视频下载地址获取
+│   ├── noter.py              # 核心处理：分片、调用 API、解析、合并
+│   ├── assembler.py          # JSON → Markdown 格式转换
+│   ├── transcriber.py        # YouTube Transcript 提取
+│   ├── whisper_transcriber.py # Whisper 本地转录 + 音频下载
+│   ├── subtitle.py           # 字幕翻译与 SRT 生成
+│   └── downloader.py         # YouTube 视频下载地址获取
 ├── prompts/
-│   ├── note_system.md   # 笔记生成系统提示词
-│   └── translate_system.md  # 字幕翻译系统提示词
+│   ├── note_system.md        # 笔记生成系统提示词
+│   ├── translate_system.md   # 双语字幕翻译提示词
+│   └── translate_zh_system.md # 中文字幕翻译提示词
 └── output/
-    ├── transcript/      # YouTube 字幕提取结果
-    ├── subtitle/        # 生成的字幕文件（SRT）
-    └── *.md             # 生成的笔记
+    ├── transcript/           # YouTube 字幕提取结果
+    ├── subtitle/{video_id}/  # 字幕输出（按视频分目录）
+    │   ├── audio.m4a             # 下载的音频
+    │   ├── subtitle_en.srt       # Whisper 英文字幕
+    │   ├── subtitle_en_youtube.srt # YouTube 原始字幕
+    │   └── subtitle_zh.srt       # 中文翻译字幕
+    └── *.md                  # 生成的笔记
 ```
 
 ## 输出示例
@@ -188,8 +209,9 @@ lecture2note/
 - [Google GenAI SDK](https://github.com/googleapis/python-genai) — Gemini API 调用
 - [OpenAI Python SDK](https://github.com/openai/openai-python) — GPT API 调用及 OpenAI 兼容接口
 - [Click](https://click.palletsprojects.com/) — CLI 框架
-- [youtube-transcript-api](https://github.com/jdepoix/youtube-transcript-api) — YouTube 字幕提取
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp) — YouTube 视频格式与下载地址获取
+- [mlx-whisper](https://github.com/ml-explore/mlx-examples) — Apple Silicon GPU 加速的 Whisper 语音转录
+- [youtube-transcript-api](https://github.com/jdepoix/youtube-transcript-api) — YouTube 字幕提取（回退方案）
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) — YouTube 音频下载与视频格式获取
 - [python-dotenv](https://github.com/theskumar/python-dotenv) — 环境变量管理
 
 ## License
