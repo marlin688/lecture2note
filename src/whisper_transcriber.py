@@ -132,10 +132,46 @@ def download_audio(url: str, output_dir: Path) -> Path:
         "extractor_args": {"youtube": {"js_runtimes": ["nodejs"]}},
     }
 
-    click.echo("   📥 正在下载音频...")
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        ext = info.get("ext", "m4a")
+    # 下载音频（最多重试 3 次）
+    MAX_RETRIES = 3
+    ext = "m4a"
+    for attempt in range(1, MAX_RETRIES + 1):
+        click.echo(f"   📥 正在下载音频...{f' (第 {attempt} 次尝试)' if attempt > 1 else ''}")
+
+        # 清理上次不完整的文件
+        for f in output_dir.glob("audio.*"):
+            if f.suffix in (".m4a", ".mp3", ".wav", ".webm", ".ogg"):
+                f.unlink()
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            ext = info.get("ext", "m4a")
+
+        # 找到下载的文件
+        audio_path = output_dir / f"audio.{ext}"
+        if not audio_path.exists():
+            for f in output_dir.glob("audio.*"):
+                if f.suffix in (".m4a", ".mp3", ".wav", ".webm", ".ogg"):
+                    audio_path = f
+                    break
+
+        if not audio_path.exists():
+            if attempt < MAX_RETRIES:
+                click.echo(f"   ⚠️ 未找到音频文件，重试...")
+                continue
+            raise click.ClickException("音频下载失败，未找到文件")
+
+        # 校验下载完整性
+        if expected_duration and not _check_audio_duration(audio_path, expected_duration):
+            if attempt < MAX_RETRIES:
+                click.echo(f"   ⚠️ 音频下载不完整，重试...")
+                continue
+            raise click.ClickException(
+                f"音频下载不完整（已重试 {MAX_RETRIES} 次），请检查网络后重新运行"
+            )
+
+        # 下载成功
+        break
 
     # 下载封面
     thumbnail_url = info.get("thumbnail")
@@ -153,23 +189,6 @@ def download_audio(url: str, output_dir: Path) -> Path:
                 click.echo(f"   🖼️ 封面已保存: {cover_path}")
         except Exception as e:
             click.echo(f"   ⚠️ 封面下载失败: {e}")
-
-    audio_path = output_dir / f"audio.{ext}"
-    if not audio_path.exists():
-        # 如果文件名不匹配，找目录下的音频文件
-        for f in output_dir.glob("audio.*"):
-            if f.suffix in (".m4a", ".mp3", ".wav", ".webm", ".ogg"):
-                audio_path = f
-                break
-
-    if not audio_path.exists():
-        raise click.ClickException("音频下载失败，未找到文件")
-
-    # 校验下载完整性
-    if expected_duration and not _check_audio_duration(audio_path, expected_duration):
-        raise click.ClickException(
-            f"音频下载不完整，请检查网络后重试（删除 {audio_path} 后重新运行）"
-        )
 
     size_mb = audio_path.stat().st_size / (1024 * 1024)
     click.echo(f"   ✓ 音频已下载: {audio_path} ({size_mb:.1f}MB)")
