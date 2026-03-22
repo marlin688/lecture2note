@@ -444,6 +444,109 @@ def translate_srt(en_srt: str, model: str, mode: str = "bilingual") -> str:
     return "\n\n".join(results)
 
 
+def _srt_to_plain_text(srt_text: str) -> str:
+    """将 SRT 字幕提取为纯文本（去掉序号和时间戳）。"""
+    lines = []
+    for entry in re.split(r"\n\n+", srt_text.strip()):
+        parts = entry.strip().split("\n")
+        if len(parts) >= 3:
+            lines.append(" ".join(parts[2:]))
+    return "\n".join(lines)
+
+
+def _get_video_info(url: str) -> dict:
+    """获取视频标题和时长等元信息。"""
+    try:
+        import yt_dlp
+        ydl_opts = {
+            "quiet": True, "no_warnings": True,
+            "extractor_args": {"youtube": {"js_runtimes": ["nodejs"]}},
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+        duration = info.get("duration", 0)
+        m, s = divmod(duration, 60)
+        return {
+            "title": info.get("title", "Unknown"),
+            "duration": f"{m}分{s}秒",
+        }
+    except Exception:
+        return {"title": "Unknown", "duration": "未知"}
+
+
+def generate_summary(
+    url: str,
+    model: str,
+    srt_path: str | Path | None = None,
+) -> Path:
+    """根据字幕内容生成视频摘要 Markdown。
+
+    Args:
+        url: YouTube 视频 URL
+        model: LLM 模型名称
+        srt_path: 指定字幕文件路径；为 None 时自动查找已有字幕
+
+    Returns:
+        生成的 Markdown 文件路径
+    """
+    from src.transcriber import extract_video_id
+    video_id = extract_video_id(url)
+    video_dir = SUBTITLE_DIR / video_id
+    video_dir.mkdir(parents=True, exist_ok=True)
+
+    # 确定字幕来源
+    if srt_path:
+        srt_text = Path(srt_path).read_text(encoding="utf-8")
+    else:
+        # 按优先级查找已有字幕
+        candidates = [
+            video_dir / "subtitle_zh.srt",
+            video_dir / "subtitle_zh_youtube.srt",
+            video_dir / "subtitle_en.srt",
+            video_dir / "subtitle_en_youtube.srt",
+        ]
+        srt_text = None
+        for p in candidates:
+            if p.exists():
+                srt_text = p.read_text(encoding="utf-8")
+                click.echo(f"   📄 使用字幕: {p}")
+                break
+        if srt_text is None:
+            raise click.ClickException(
+                "未找到字幕文件，请先用 --subtitle 生成字幕"
+            )
+
+    # 获取视频元信息
+    click.echo("📝 正在生成视频摘要...")
+    info = _get_video_info(url)
+    plain_text = _srt_to_plain_text(srt_text)
+
+    # 构建 prompt
+    system_prompt = (PROMPTS_DIR / "summary_system.md").read_text(encoding="utf-8")
+    user_message = (
+        f"视频标题: {info['title']}\n"
+        f"视频链接: {url}\n"
+        f"视频时长: {info['duration']}\n\n"
+        f"--- 字幕内容 ---\n{plain_text}"
+    )
+
+    raw = _call_translate_llm(system_prompt, user_message, model)
+
+    # 清理可能的 ```markdown 包裹
+    text = raw.strip()
+    if text.startswith("```"):
+        first_nl = text.find("\n")
+        if first_nl != -1:
+            text = text[first_nl + 1:]
+        if text.rstrip().endswith("```"):
+            text = text.rstrip()[:-3].rstrip()
+
+    out_path = video_dir / "summary.md"
+    out_path.write_text(text, encoding="utf-8")
+    click.echo(f"   ✅ 摘要已保存: {out_path}")
+    return out_path
+
+
 def generate_subtitle(
     url: str,
     model: str,

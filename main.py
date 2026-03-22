@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from src.noter import process_transcript
 from src.assembler import assemble_markdown
 from src.transcriber import fetch_transcript, save_transcript
-from src.subtitle import generate_subtitle
+from src.subtitle import generate_subtitle, generate_summary
 from src.downloader import print_formats
 
 load_dotenv()
@@ -36,7 +36,8 @@ def _slugify(text: str) -> str:
 @click.option("--list-formats", "list_fmts", is_flag=True, help="列出视频可用的下载格式和地址")
 @click.option("--whisper-model", default="medium", type=click.Choice(["tiny", "base", "small", "medium", "large"]), help="Whisper 模型 (默认 medium)")
 @click.option("--no-whisper", is_flag=True, help="不使用 Whisper，回退到 YouTube 字幕")
-def main(input_path, youtube_url, output_path, subject, model, save_json, transcript_only, subtitle_lang, list_fmts, whisper_model, no_whisper):
+@click.option("--summary", is_flag=True, help="生成视频摘要 Markdown（含建议中文标题）")
+def main(input_path, youtube_url, output_path, subject, model, save_json, transcript_only, subtitle_lang, list_fmts, whisper_model, no_whisper, summary):
     """Lecture2Note - 将课堂录音转写文本整理为结构化笔记"""
     # 0. 参数校验
     if not input_path and not youtube_url:
@@ -62,11 +63,23 @@ def main(input_path, youtube_url, output_path, subject, model, save_json, transc
             whisper_model=whisper_model,
         )
         click.echo(f"\n✅ 字幕文件: {srt_path}")
+        # 如果同时指定了 --summary，生成摘要
+        if summary:
+            generate_summary(youtube_url, model)
         # 顺便打印下载地址
         try:
             print_formats(youtube_url)
         except Exception:
             click.echo("⚠️ 获取下载地址失败（可能未安装 yt-dlp），可手动安装: pip install yt-dlp")
+        return
+
+    # 0.0.2 单独生成摘要（已有字幕时）
+    if summary:
+        if not youtube_url:
+            raise click.UsageError("--summary 需要通过 -u 指定 YouTube 视频 URL")
+        if model is None:
+            model = "claude-sonnet-4-5-20250929"
+        generate_summary(youtube_url, model)
         return
 
     # 0.1 如果提供了 YouTube URL，先提取 Transcript

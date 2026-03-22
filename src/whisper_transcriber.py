@@ -72,6 +72,21 @@ def _format_srt_time(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
+def _check_audio_duration(audio_path: Path, expected_duration: float) -> bool:
+    """检查音频文件时长是否与预期一致（允许 5 秒误差）。"""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "csv=p=0", str(audio_path)],
+            capture_output=True, text=True, timeout=10,
+        )
+        actual = float(result.stdout.strip())
+        return abs(actual - expected_duration) < 5
+    except Exception:
+        return True  # ffprobe 不可用时跳过检查
+
+
 def download_audio(url: str, output_dir: Path) -> Path:
     """用 yt-dlp 下载音频。
 
@@ -82,6 +97,32 @@ def download_audio(url: str, output_dir: Path) -> Path:
 
     output_dir.mkdir(parents=True, exist_ok=True)
     output_template = str(output_dir / "audio.%(ext)s")
+
+    # 先获取视频信息（用于时长校验和检测已有文件）
+    ydl_info_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "extractor_args": {"youtube": {"js_runtimes": ["nodejs"]}},
+    }
+    with yt_dlp.YoutubeDL(ydl_info_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+    expected_duration = info.get("duration", 0)
+
+    # 检查已有音频文件是否完整
+    existing = None
+    for f in output_dir.glob("audio.*"):
+        if f.suffix in (".m4a", ".mp3", ".wav", ".webm", ".ogg"):
+            existing = f
+            break
+
+    if existing and expected_duration:
+        if _check_audio_duration(existing, expected_duration):
+            size_mb = existing.stat().st_size / (1024 * 1024)
+            click.echo(f"   ✓ 音频已存在且完整: {existing} ({size_mb:.1f}MB)")
+            return existing
+        else:
+            click.echo(f"   ⚠️ 已有音频文件不完整，重新下载...")
+            existing.unlink()
 
     ydl_opts = {
         "format": "bestaudio[ext=m4a]/bestaudio",
@@ -114,15 +155,22 @@ def download_audio(url: str, output_dir: Path) -> Path:
             click.echo(f"   ⚠️ 封面下载失败: {e}")
 
     audio_path = output_dir / f"audio.{ext}"
-    if audio_path.exists():
-        size_mb = audio_path.stat().st_size / (1024 * 1024)
-        click.echo(f"   ✓ 音频已下载: {audio_path} ({size_mb:.1f}MB)")
-        return audio_path
+    if not audio_path.exists():
+        # 如果文件名不匹配，找目录下的音频文件
+        for f in output_dir.glob("audio.*"):
+            if f.suffix in (".m4a", ".mp3", ".wav", ".webm", ".ogg"):
+                audio_path = f
+                break
 
-    # 如果文件名不匹配，找目录下的音频文件
-    for f in output_dir.glob("audio.*"):
-        if f.suffix in (".m4a", ".mp3", ".wav", ".webm", ".ogg"):
-            click.echo(f"   ✓ 音频已下载: {f}")
-            return f
+    if not audio_path.exists():
+        raise click.ClickException("音频下载失败，未找到文件")
 
-    raise click.ClickException(f"音频下载失败，未找到文件")
+    # 校验下载完整性
+    if expected_duration and not _check_audio_duration(audio_path, expected_duration):
+        raise click.ClickException(
+            f"音频下载不完整，请检查网络后重试（删除 {audio_path} 后重新运行）"
+        )
+
+    size_mb = audio_path.stat().st_size / (1024 * 1024)
+    click.echo(f"   ✓ 音频已下载: {audio_path} ({size_mb:.1f}MB)")
+    return audio_path
