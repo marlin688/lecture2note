@@ -72,19 +72,34 @@ def _format_srt_time(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-def _check_audio_duration(audio_path: Path, expected_duration: float) -> bool:
-    """检查音频文件时长是否与预期一致（允许 5 秒误差）。"""
-    import subprocess
-    try:
-        result = subprocess.run(
-            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-             "-of", "csv=p=0", str(audio_path)],
-            capture_output=True, text=True, timeout=10,
-        )
-        actual = float(result.stdout.strip())
-        return abs(actual - expected_duration) < 5
-    except Exception:
-        return True  # ffprobe 不可用时跳过检查
+def _check_audio_complete(audio_path: Path, expected_duration: float, expected_filesize: int = 0) -> bool:
+    """检查音频文件是否完整（时长 + 文件大小双重校验）。"""
+    actual_size = audio_path.stat().st_size
+
+    # 文件大小校验：与预期大小对比（允许 10% 误差）
+    if expected_filesize and actual_size < expected_filesize * 0.9:
+        return False
+
+    # 时长校验：用 ffprobe 检测实际时长
+    if expected_duration:
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+                 "-of", "csv=p=0", str(audio_path)],
+                capture_output=True, text=True, timeout=10,
+            )
+            actual = float(result.stdout.strip())
+            if abs(actual - expected_duration) > 5:
+                return False
+        except Exception:
+            pass  # ffprobe 不可用时跳过时长检查
+
+    # 兜底：基于时长估算最小合理文件大小（至少 4kbps）
+    if expected_duration and actual_size < expected_duration * 500:
+        return False
+
+    return True
 
 
 def download_audio(url: str, output_dir: Path) -> Path:
@@ -108,6 +123,19 @@ def download_audio(url: str, output_dir: Path) -> Path:
         info = ydl.extract_info(url, download=False)
     expected_duration = info.get("duration", 0)
 
+    # 获取预期文件大小（从 bestaudio 格式信息中提取）
+    expected_filesize = 0
+    for fmt in info.get("formats", []):
+        if fmt.get("format_id") == "140":  # m4a bestaudio
+            expected_filesize = fmt.get("filesize") or fmt.get("filesize_approx") or 0
+            break
+    if not expected_filesize:
+        for fmt in info.get("formats", []):
+            if fmt.get("acodec") != "none" and fmt.get("vcodec") in ("none", None):
+                expected_filesize = fmt.get("filesize") or fmt.get("filesize_approx") or 0
+                if expected_filesize:
+                    break
+
     # 检查已有音频文件是否完整
     existing = None
     for f in output_dir.glob("audio.*"):
@@ -115,8 +143,8 @@ def download_audio(url: str, output_dir: Path) -> Path:
             existing = f
             break
 
-    if existing and expected_duration:
-        if _check_audio_duration(existing, expected_duration):
+    if existing and (expected_duration or expected_filesize):
+        if _check_audio_complete(existing, expected_duration, expected_filesize):
             size_mb = existing.stat().st_size / (1024 * 1024)
             click.echo(f"   ✓ 音频已存在且完整: {existing} ({size_mb:.1f}MB)")
             return existing
@@ -161,8 +189,8 @@ def download_audio(url: str, output_dir: Path) -> Path:
                 continue
             raise click.ClickException("音频下载失败，未找到文件")
 
-        # 校验下载完整性
-        if expected_duration and not _check_audio_duration(audio_path, expected_duration):
+        # 校验下载完整性（时长 + 文件大小双重校验）
+        if not _check_audio_complete(audio_path, expected_duration, expected_filesize):
             if attempt < MAX_RETRIES:
                 click.echo(f"   ⚠️ 音频下载不完整，重试...")
                 continue
