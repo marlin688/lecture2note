@@ -10,7 +10,8 @@ from src.noter import process_transcript
 from src.assembler import assemble_markdown
 from src.transcriber import fetch_transcript, save_transcript
 from src.subtitle import generate_subtitle, generate_summary
-from src.downloader import print_formats
+from src.downloader import print_formats, download_video
+from src.transcriber import extract_video_id
 
 load_dotenv()
 
@@ -37,8 +38,89 @@ def _slugify(text: str) -> str:
 @click.option("--whisper-model", default="medium", type=click.Choice(["tiny", "base", "small", "medium", "large"]), help="Whisper 模型 (默认 medium)")
 @click.option("--no-whisper", is_flag=True, help="不使用 Whisper，回退到 YouTube 字幕")
 @click.option("--summary", is_flag=True, help="生成视频摘要 Markdown（含建议中文标题）")
-def main(input_path, youtube_url, output_path, subject, model, save_json, transcript_only, subtitle_lang, list_fmts, whisper_model, no_whisper, summary):
+@click.option("--batch", "batch_file", default=None, type=click.Path(exists=True), help="批量处理：指定包含多个 YouTube URL 的文本文件（每行一个）")
+@click.option("--max-res", default="1080p", type=click.Choice(["720p", "1080p", "2k", "4k"]), help="下载视频的最大分辨率 (默认 1080p)")
+def main(input_path, youtube_url, output_path, subject, model, save_json, transcript_only, subtitle_lang, list_fmts, whisper_model, no_whisper, summary, batch_file, max_res):
     """Lecture2Note - 将课堂录音转写文本整理为结构化笔记"""
+
+    # ── 批量模式 ──
+    if batch_file:
+        urls = [
+            line.strip() for line in Path(batch_file).read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        if not urls:
+            raise click.UsageError("批量文件中没有有效的 URL")
+
+        if subtitle_lang is None:
+            subtitle_lang = "zh"
+        if model is None:
+            model = "claude-sonnet-4-5-20250929"
+
+        click.echo(f"📋 批量模式：共 {len(urls)} 个视频")
+        click.echo(f"   字幕语言: {subtitle_lang} | 模型: {model}")
+        click.echo(f"   摘要: {'是' if summary else '否'} | 下载视频: 是 (最高 {max_res})\n")
+
+        succeeded, skipped, failed = [], [], []
+        for idx, url in enumerate(urls, 1):
+            click.echo(f"\n{'='*60}")
+            click.echo(f"[{idx}/{len(urls)}] {url}")
+            click.echo(f"{'='*60}")
+
+            # 断点续传：检查已完成的步骤
+            video_id = extract_video_id(url)
+            video_dir = Path("output/subtitle") / video_id
+
+            suffix = "_zh" if subtitle_lang == "zh" else ("_bilingual" if subtitle_lang == "bilingual" else "_en")
+            has_subtitle = (video_dir / f"subtitle{suffix}.srt").exists()
+            has_summary = (video_dir / "summary.md").exists()
+            has_video = any(video_dir.glob("*.mp4")) if video_dir.exists() else False
+
+            if has_subtitle and (has_summary or not summary) and has_video:
+                click.echo(f"⏭️  全部已完成，跳过")
+                skipped.append(url)
+                continue
+
+            try:
+                # 1) 生成字幕
+                if has_subtitle:
+                    click.echo(f"⏭️  字幕已存在，跳过")
+                else:
+                    srt_path = generate_subtitle(
+                        url, model,
+                        target_lang=subtitle_lang,
+                        use_whisper=not no_whisper,
+                        whisper_model=whisper_model,
+                    )
+                    click.echo(f"✅ 字幕: {srt_path}")
+
+                # 2) 生成摘要（如果指定）
+                if summary:
+                    if has_summary:
+                        click.echo(f"⏭️  摘要已存在，跳过")
+                    else:
+                        generate_summary(url, model)
+
+                # 3) 下载最高画质视频
+                if has_video:
+                    click.echo(f"⏭️  视频已存在，跳过")
+                else:
+                    download_video(url, max_res=max_res)
+
+                succeeded.append(url)
+            except Exception as e:
+                click.echo(f"❌ 失败: {e}")
+                failed.append((url, str(e)))
+
+        # 汇总
+        click.echo(f"\n{'='*60}")
+        click.echo(f"📊 批量处理完成: {len(succeeded)} 成功, {len(skipped)} 跳过, {len(failed)} 失败")
+        if failed:
+            click.echo("失败列表:")
+            for url, err in failed:
+                click.echo(f"  ✗ {url} — {err}")
+        return
+
     # 0. 参数校验
     if not input_path and not youtube_url:
         raise click.UsageError("请通过 -i 指定输入文件或通过 -u 指定 YouTube 视频 URL")

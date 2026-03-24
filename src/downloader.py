@@ -105,3 +105,55 @@ def print_formats(url: str):
 
     click.echo(f"\n💡 使用 yt-dlp 下载: yt-dlp -f <format_id> \"{url}\"")
     click.echo(f"   下载最佳画质: yt-dlp -f 'bestvideo+bestaudio' \"{url}\"")
+
+
+_RES_MAP = {
+    "720p": 720,
+    "1080p": 1080,
+    "2k": 1440,
+    "4k": 2160,
+}
+
+
+def download_video(url: str, output_dir: str | None = None, max_res: str = "1080p") -> str:
+    """下载视频（bestvideo+bestaudio 自动合并）。
+
+    Args:
+        url: YouTube 视频 URL
+        output_dir: 输出目录，默认为 output/subtitle/<video_id>/
+        max_res: 最大分辨率限制，可选 720p/1080p/2k/4k
+
+    Returns:
+        下载的视频文件路径
+    """
+    video_id = extract_video_id(url)
+    if output_dir is None:
+        output_dir = f"output/subtitle/{video_id}"
+
+    import os
+    os.makedirs(output_dir, exist_ok=True)
+
+    height = _RES_MAP.get(max_res, 1080)
+    fmt = f"bestvideo[height<={height}]+bestaudio/best[height<={height}]"
+
+    ydl_opts = {
+        "format": fmt,
+        "merge_output_format": "mp4",
+        "outtmpl": f"{output_dir}/%(title)s.%(ext)s",
+        "quiet": False,
+        "no_warnings": True,
+        "extractor_args": {"youtube": {"js_runtimes": ["nodejs"]}},
+    }
+
+    click.echo(f"📥 正在下载视频 (最高 {max_res})...")
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        filename = ydl.prepare_filename(info)
+        # 合并后扩展名可能变成 .mp4
+        from pathlib import Path
+        final = Path(filename).with_suffix(".mp4")
+        if final.exists():
+            filename = str(final)
+
+    click.echo(f"   ✅ 视频已保存: {filename}")
+    return filename
