@@ -1,9 +1,16 @@
 """通过 yt-dlp 获取 YouTube 视频下载地址。"""
 
+import subprocess
+from pathlib import Path
+
 import click
 import yt_dlp
 
 from src.transcriber import extract_video_id
+
+# 视频文件扩展名
+_VIDEO_EXTS = (".mp4", ".webm", ".mkv")
+MAX_RETRIES = 3
 
 
 def list_formats(url: str) -> list[dict]:
@@ -115,13 +122,63 @@ _RES_MAP = {
 }
 
 
-def download_video(url: str, output_dir: str | None = None, max_res: str = "1080p") -> str:
-    """下载视频（bestvideo+bestaudio 自动合并）。
+def _check_video_complete(video_path: Path, expected_duration: float, expected_filesize: int = 0) -> bool:
+    """检查视频文件是否完整（时长 + 文件大小双重校验）。"""
+    if not video_path.exists():
+        return False
+    # .part 文件一定是不完整的
+    if video_path.name.endswith(".part"):
+        return False
+    actual_size = video_path.stat().st_size
+    if actual_size == 0:
+        return False
+
+    # 文件大小校验：与预期大小对比（允许 10% 误差）
+    if expected_filesize and actual_size < expected_filesize * 0.9:
+        return False
+
+    # 时长校验：用 ffprobe 检测实际时长
+    if expected_duration:
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+                 "-of", "csv=p=0", str(video_path)],
+                capture_output=True, text=True, timeout=10,
+            )
+            actual = float(result.stdout.strip())
+            if abs(actual - expected_duration) > 5:
+                return False
+        except Exception:
+            pass  # ffprobe 不可用时跳过时长检查
+
+    # 兜底：基于时长估算最小合理文件大小（至少 50kbps）
+    if expected_duration and actual_size < expected_duration * 6250:
+        return False
+
+    return True
+
+
+def _find_existing_video(video_dir: Path) -> Path | None:
+    """查找目录中已有的视频文件（mp4/webm/mkv），也检测 .part 未完成文件。"""
+    if not video_dir.exists():
+        return None
+    # 优先返回完整格式的文件
+    for f in video_dir.iterdir():
+        if f.suffix in _VIDEO_EXTS and f.stat().st_size > 0:
+            return f
+    # 其次返回 .part 文件（yt-dlp 下载中断的残留）
+    for f in video_dir.iterdir():
+        if f.name.endswith(".part") and any(ext in f.name for ext in _VIDEO_EXTS):
+            return f
+    return None
+
+
+def download_video(url: str, output_dir: str | None = None) -> str:
+    """下载最高画质纯视频（bestvideo），支持断点续传和完整性校验。
 
     Args:
         url: YouTube 视频 URL
         output_dir: 输出目录，默认为 output/subtitle/<video_id>/
-        max_res: 最大分辨率限制，可选 720p/1080p/2k/4k
 
     Returns:
         下载的视频文件路径
@@ -130,30 +187,92 @@ def download_video(url: str, output_dir: str | None = None, max_res: str = "1080
     if output_dir is None:
         output_dir = f"output/subtitle/{video_id}"
 
-    import os
-    os.makedirs(output_dir, exist_ok=True)
+    video_dir = Path(output_dir)
+    video_dir.mkdir(parents=True, exist_ok=True)
 
-    height = _RES_MAP.get(max_res, 1080)
-    fmt = f"bestvideo[height<={height}]+bestaudio/best[height<={height}]"
+    # 先获取视频信息（用于时长和文件大小校验）
+    ydl_info_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "extractor_args": {"youtube": {"js_runtimes": ["nodejs"]}},
+    }
+    with yt_dlp.YoutubeDL(ydl_info_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+    expected_duration = info.get("duration", 0)
 
+    # 估算预期文件大小（bestvideo = 最高画质纯视频）
+    expected_filesize = 0
+    for fmt in info.get("formats", []):
+        if fmt.get("vcodec") != "none" and fmt.get("acodec") == "none":
+            fs = fmt.get("filesize") or fmt.get("filesize_approx") or 0
+            if fs > expected_filesize:
+                expected_filesize = fs
+
+    # 检查已有视频文件是否完整
+    existing = _find_existing_video(video_dir)
+    if existing and (expected_duration or expected_filesize):
+        if _check_video_complete(existing, expected_duration, expected_filesize):
+            size_mb = existing.stat().st_size / (1024 * 1024)
+            click.echo(f"   ✓ 视频已存在且完整: {existing} ({size_mb:.1f}MB)")
+            return str(existing)
+        else:
+            click.echo(f"   ⚠️ 已有视频文件不完整，重新下载...")
+            existing.unlink()
+
+    fmt = "bestvideo"
     ydl_opts = {
         "format": fmt,
-        "merge_output_format": "mp4",
         "outtmpl": f"{output_dir}/%(title)s.%(ext)s",
         "quiet": False,
         "no_warnings": True,
         "extractor_args": {"youtube": {"js_runtimes": ["nodejs"]}},
     }
 
-    click.echo(f"📥 正在下载视频 (最高 {max_res})...")
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        filename = ydl.prepare_filename(info)
-        # 合并后扩展名可能变成 .mp4
-        from pathlib import Path
-        final = Path(filename).with_suffix(".mp4")
-        if final.exists():
-            filename = str(final)
+    # 下载视频（最多重试 MAX_RETRIES 次）
+    for attempt in range(1, MAX_RETRIES + 1):
+        click.echo(f"📥 正在下载视频 (bestvideo)...{f' (第 {attempt} 次尝试)' if attempt > 1 else ''}")
 
-    click.echo(f"   ✅ 视频已保存: {filename}")
+        # 清理上次不完整的文件（包括 .part 残留）
+        for f in video_dir.iterdir():
+            if f.suffix in _VIDEO_EXTS or (f.name.endswith(".part") and any(ext in f.name for ext in _VIDEO_EXTS)):
+                f.unlink()
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                filename = ydl.prepare_filename(info)
+        except Exception as e:
+            if attempt < MAX_RETRIES:
+                click.echo(f"   ⚠️ 下载出错: {e}，重试...")
+                continue
+            raise click.ClickException(f"视频下载失败（已重试 {MAX_RETRIES} 次）: {e}")
+
+        video_path = Path(filename)
+        # 也检查 webm 等格式
+        if not video_path.exists():
+            found = _find_existing_video(video_dir)
+            if found:
+                video_path = found
+                filename = str(found)
+
+        if not video_path.exists():
+            if attempt < MAX_RETRIES:
+                click.echo(f"   ⚠️ 未找到视频文件，重试...")
+                continue
+            raise click.ClickException("视频下载失败，未找到文件")
+
+        # 校验下载完整性
+        if not _check_video_complete(video_path, expected_duration, expected_filesize):
+            if attempt < MAX_RETRIES:
+                click.echo(f"   ⚠️ 视频下载不完整，重试...")
+                continue
+            raise click.ClickException(
+                f"视频下载不完整（已重试 {MAX_RETRIES} 次），请检查网络后重新运行"
+            )
+
+        # 下载成功
+        break
+
+    size_mb = video_path.stat().st_size / (1024 * 1024)
+    click.echo(f"   ✅ 视频已保存: {filename} ({size_mb:.1f}MB)")
     return filename

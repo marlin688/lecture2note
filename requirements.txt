@@ -1,8 +1,8 @@
-anthropic
-google-genai
-openai
-python-dotenv
-click
-youtube-transcript-api
-yt-dlp
-mlx-whisper
+anthropic==0.84.0
+google-genai==1.67.0
+openai==2.26.0
+python-dotenv==1.2.2
+click==8.3.1
+youtube-transcript-api==1.2.4
+yt-dlp==2026.3.17
+mlx-whisper==0.4.3

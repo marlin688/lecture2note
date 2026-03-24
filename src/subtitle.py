@@ -576,27 +576,34 @@ def generate_subtitle(
 
         click.echo("🎬 Whisper 转录模式")
         video_dir = SUBTITLE_DIR / video_id
-        audio_path = download_audio(url, video_dir)
 
-        # 同时保存 YouTube 原始字幕（如果有的话）
-        youtube_srt = None
-        try:
-            _, snippets, _ = fetch_subtitle_snippets(url)
-            youtube_srt = snippets_to_srt(snippets)
-            youtube_path = video_dir / "subtitle_en_youtube.srt"
-            youtube_path.write_text(youtube_srt, encoding="utf-8")
-            click.echo(f"   📄 YouTube 原始字幕已保存: {youtube_path}")
-        except Exception:
-            click.echo("   ℹ️ YouTube 字幕不可用，跳过")
+        # 检查英文字幕是否已存在，跳过 Whisper 转录
+        en_existing = video_dir / "subtitle_en.srt"
+        if en_existing.exists() and en_existing.stat().st_size > 0:
+            click.echo(f"   ⏭️ 英文字幕已存在，跳过 Whisper 转录: {en_existing}")
+            en_srt = en_existing.read_text(encoding="utf-8")
+        else:
+            audio_path = download_audio(url, video_dir)
 
-        en_srt = transcribe_to_srt(str(audio_path), model_name=whisper_model)
+            # 同时保存 YouTube 原始字幕（如果有的话）
+            youtube_srt = None
+            try:
+                _, snippets, _ = fetch_subtitle_snippets(url)
+                youtube_srt = snippets_to_srt(snippets)
+                youtube_path = video_dir / "subtitle_en_youtube.srt"
+                youtube_path.write_text(youtube_srt, encoding="utf-8")
+                click.echo(f"   📄 YouTube 原始字幕已保存: {youtube_path}")
+            except Exception:
+                click.echo("   ℹ️ YouTube 字幕不可用，跳过")
 
-        # 质量检测：如果 Whisper 结果大量空条目，自动回退到 YouTube 字幕
-        srt_entries = re.split(r"\n\n+", en_srt.strip())
-        non_empty = sum(1 for e in srt_entries if len(e.strip().split("\n")) >= 3 and e.strip().split("\n")[2].strip())
-        if non_empty < 5 and youtube_srt:
-            click.echo(f"   ⚠️ Whisper 转录质量不佳（仅 {non_empty} 条有效），回退到 YouTube 字幕")
-            en_srt = youtube_srt
+            en_srt = transcribe_to_srt(str(audio_path), model_name=whisper_model)
+
+            # 质量检测：如果 Whisper 结果大量空条目，自动回退到 YouTube 字幕
+            srt_entries = re.split(r"\n\n+", en_srt.strip())
+            non_empty = sum(1 for e in srt_entries if len(e.strip().split("\n")) >= 3 and e.strip().split("\n")[2].strip())
+            if non_empty < 5 and youtube_srt:
+                click.echo(f"   ⚠️ Whisper 转录质量不佳（仅 {non_empty} 条有效），回退到 YouTube 字幕")
+                en_srt = youtube_srt
     else:
         # YouTube 字幕回退路径
         click.echo("🎬 YouTube 字幕模式")
@@ -612,8 +619,8 @@ def generate_subtitle(
             en_srt = snippets_to_srt(snippets)
             click.echo("   ✓ 人工字幕，无需合并")
 
-    # 输出目录：Whisper 模式放在 video_dir 下，YouTube 模式放在 SUBTITLE_DIR 下
-    out_dir = SUBTITLE_DIR / video_id if use_whisper else SUBTITLE_DIR
+    # 输出目录：统一放在 SUBTITLE_DIR / video_id 下
+    out_dir = SUBTITLE_DIR / video_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # 保存英文 SRT
