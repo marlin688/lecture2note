@@ -53,10 +53,11 @@
 - Apple Silicon Mac（M1/M2/M3/M4）推荐，mlx-whisper 可 GPU 加速
 - ffmpeg（`brew install ffmpeg`，用于音频提取）
 - Node.js（yt-dlp 需要 nodejs 运行时解析 YouTube）
-- 至少一个 AI 模型的 API Key：
+- 至少一个 AI 模型的 API Key（支持直连或中转平台）：
   - [Anthropic API Key](https://console.anthropic.com/)（Claude 模型，字幕翻译默认使用）
   - [Google AI API Key](https://aistudio.google.com/)（Gemini 模型）
   - [OpenAI API Key](https://platform.openai.com/)（GPT 模型）
+  - 中转平台：支持兔子中转（tuzi）、CRS 中转（itssx）等，通过 `--platform` 动态切换
 
 ### 安装
 
@@ -158,6 +159,33 @@ python main.py --batch urls.txt --subtitle bilingual --max-res 2k
 python main.py --batch urls.txt --summary
 ```
 
+#### 平台切换
+
+支持多个 API 中转平台，通过 `--platform` 参数或 `.env` 中的 `API_PLATFORM` 切换：
+
+```bash
+# 命令行指定平台
+python main.py -u "..." --subtitle zh --platform itssx
+python main.py -u "..." --subtitle zh --platform tuzi
+
+# 或在 .env 中设置默认平台
+# API_PLATFORM=itssx
+```
+
+在 `.env` 中按前缀配置各平台凭据：
+
+```env
+# 平台: tuzi
+TUZI_API_KEY=your-key
+TUZI_BASE_URL=https://api.tu-zi.com
+TUZI_MODEL=claude-opus-4-6
+
+# 平台: itssx
+ITSSX_API_KEY=your-key
+ITSSX_BASE_URL=https://crs.itssx.com/api
+ITSSX_MODEL=claude-sonnet-4-5-20250929
+```
+
 #### 其他
 
 ```bash
@@ -183,6 +211,7 @@ python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --list-formats
 | `--download` | 字幕生成后自动下载最高画质视频 | `false` |
 | `--batch` | 批量处理：指定包含多个 YouTube URL 的文本文件 | — |
 | `--max-res` | 下载视频的最大分辨率（`720p`/`1080p`/`2k`/`4k`） | `1080p` |
+| `--platform` | API 中转平台（`tuzi` / `itssx`），覆盖 `.env` 中的 `API_PLATFORM` | `.env` 配置 |
 | `--list-formats` | 列出视频可用的下载格式和地址 | `false` |
 
 ## 项目结构

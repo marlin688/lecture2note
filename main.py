@@ -18,6 +18,28 @@ load_dotenv()
 OUTPUT_DIR = Path("output")
 
 
+def _apply_platform(platform: str | None):
+    """根据平台名称，将对应前缀的环境变量覆盖到标准 ANTHROPIC_* 等变量上。"""
+    name = (platform or os.environ.get("API_PLATFORM", "")).strip().lower()
+    if not name:
+        return
+    prefix = name.upper() + "_"
+    # 映射: 平台前缀变量 -> 标准变量
+    mapping = {
+        f"{prefix}API_KEY": "ANTHROPIC_API_KEY",
+        f"{prefix}BASE_URL": "ANTHROPIC_BASE_URL",
+        f"{prefix}MODEL": "ANTHROPIC_MODEL",
+    }
+    applied = False
+    for src, dst in mapping.items():
+        val = os.environ.get(src)
+        if val:
+            os.environ[dst] = val
+            applied = True
+    if applied:
+        click.echo(f"🔗 平台: {name} ({os.environ.get('ANTHROPIC_BASE_URL', '')})")
+
+
 def _slugify(text: str) -> str:
     """将标题转为安全的文件名。"""
     text = re.sub(r"[^\w\u4e00-\u9fff]+", "_", text)
@@ -40,8 +62,12 @@ def _slugify(text: str) -> str:
 @click.option("--summary", is_flag=True, help="生成视频摘要 Markdown（含建议中文标题）")
 @click.option("--batch", "batch_file", default=None, type=click.Path(exists=True), help="批量处理：指定包含多个 YouTube URL 的文本文件（每行一个）")
 @click.option("--download", is_flag=True, help="字幕生成后自动下载最高画质视频")
-def main(input_path, youtube_url, output_path, subject, model, save_json, transcript_only, subtitle_lang, list_fmts, whisper_model, no_whisper, summary, batch_file, download):
+@click.option("--platform", default=None, help="API 中转平台 (tuzi/itssx)，覆盖 .env 中的 API_PLATFORM")
+def main(input_path, youtube_url, output_path, subject, model, save_json, transcript_only, subtitle_lang, list_fmts, whisper_model, no_whisper, summary, batch_file, download, platform):
     """Lecture2Note - 将课堂录音转写文本整理为结构化笔记"""
+
+    # ── 平台切换 ──
+    _apply_platform(platform)
 
     # ── 批量模式 ──
     if batch_file:

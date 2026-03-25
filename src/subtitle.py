@@ -329,16 +329,20 @@ def _call_translate_claude(system_prompt: str, user_message: str, model: str) ->
     client = anthropic.Anthropic(
         api_key=api_key,
         base_url=base_url,
-        http_client=httpx.Client(),
+        http_client=httpx.Client(timeout=httpx.Timeout(600.0, connect=60.0)),
     )
-    response = client.messages.create(
+    # 使用流式模式兼容强制返回 SSE 的中转平台
+    text_parts = []
+    with client.messages.stream(
         model=model,
         max_tokens=16000,
         temperature=0.1,
         system=system_prompt,
         messages=[{"role": "user", "content": user_message}],
-    )
-    return response.content[0].text
+    ) as stream:
+        for text in stream.text_stream:
+            text_parts.append(text)
+    return "".join(text_parts)
 
 
 def _call_translate_gemini(system_prompt: str, user_message: str, model: str) -> str:
