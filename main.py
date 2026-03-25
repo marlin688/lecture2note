@@ -74,7 +74,8 @@ def main(input_path, youtube_url, output_path, subject, model, save_json, transc
             suffix = "_zh" if subtitle_lang == "zh" else ("_bilingual" if subtitle_lang == "bilingual" else "_en")
             has_subtitle = (video_dir / f"subtitle{suffix}.srt").exists()
             has_summary = (video_dir / "summary.md").exists()
-            has_video = _find_existing_video(video_dir) is not None
+            existing_video = _find_existing_video(video_dir)
+            has_video = existing_video is not None and not str(existing_video).endswith(".part")
 
             if has_subtitle and (has_summary or not summary) and has_video:
                 click.echo(f"⏭️  全部已完成，跳过")
