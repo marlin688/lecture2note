@@ -119,8 +119,8 @@ def _check_audio_complete(audio_path: Path, expected_duration: float, expected_f
         except Exception:
             pass  # ffprobe 不可用时跳过时长检查
 
-    # 兜底：基于时长估算最小合理文件大小（至少 4kbps）
-    if expected_duration and actual_size < expected_duration * 500:
+    # 兜底：基于时长估算最小合理文件大小（至少 32kbps = 4000 bytes/s）
+    if expected_duration and actual_size < expected_duration * 4000:
         return False
 
     return True
