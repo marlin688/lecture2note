@@ -96,6 +96,9 @@ python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --subtitle zh --whi
 
 # 不使用 Whisper，回退到 YouTube 字幕
 python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --subtitle zh --no-whisper
+
+# 字幕 + 自动下载最高画质视频
+python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --subtitle zh --download
 ```
 
 #### 摘要模式
@@ -177,6 +180,7 @@ python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --list-formats
 | `--whisper-model` | Whisper 模型（`tiny`/`base`/`small`/`medium`/`large`） | `medium` |
 | `--no-whisper` | 不使用 Whisper，回退到 YouTube 字幕 | `false` |
 | `--summary` | 生成视频摘要 Markdown | `false` |
+| `--download` | 字幕生成后自动下载最高画质视频 | `false` |
 | `--batch` | 批量处理：指定包含多个 YouTube URL 的文本文件 | — |
 | `--max-res` | 下载视频的最大分辨率（`720p`/`1080p`/`2k`/`4k`） | `1080p` |
 | `--list-formats` | 列出视频可用的下载格式和地址 | `false` |
@@ -231,11 +235,11 @@ YouTube URL
     │
     ├─► LLM 4 路并发翻译 → subtitle_zh.srt / subtitle_bilingual.srt
     │
-    ├─► 列出视频下载格式
+    ├─► [可选] LLM 生成视频摘要 → summary.md (--summary)
     │
-    ├─► [可选] LLM 生成视频摘要 → summary.md
+    ├─► [可选] 下载最高画质视频 (--download)
     │
-    └─► [可选] 下载视频 (--batch 模式自动下载)
+    └─► 列出视频下载格式（未指定 --download 时）
 ```
 
 ### 批量工作流

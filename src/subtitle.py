@@ -329,7 +329,7 @@ def _call_translate_claude(system_prompt: str, user_message: str, model: str) ->
     client = anthropic.Anthropic(
         api_key=api_key,
         base_url=base_url,
-        http_client=httpx.Client(proxy=None, trust_env=False),
+        http_client=httpx.Client(),
     )
     response = client.messages.create(
         model=model,
@@ -348,7 +348,7 @@ def _call_translate_gemini(system_prompt: str, user_message: str, model: str) ->
     if not api_key:
         raise click.ClickException("未设置 GEMINI_API_KEY")
     base_url = os.environ.get("GEMINI_BASE_URL")
-    http_opts = {"httpxClient": httpx.Client(proxy=None, trust_env=False)}
+    http_opts = {"httpxClient": httpx.Client()}
     if base_url:
         http_opts["base_url"] = base_url
     proxy_vars = {}
@@ -388,7 +388,7 @@ def _call_translate_gpt(system_prompt: str, user_message: str, model: str) -> st
         if not base_url.rstrip("/").endswith("/v1"):
             base_url = base_url.rstrip("/") + "/v1"
         client_kwargs["base_url"] = base_url
-        client_kwargs["http_client"] = httpx.Client(proxy=None, trust_env=False)
+        client_kwargs["http_client"] = httpx.Client()
     client = OpenAI(api_key=api_key, **client_kwargs)
     response = client.chat.completions.create(
         model=model,

@@ -47,9 +47,33 @@ def transcribe_to_srt(audio_path: str, model_name: str = "medium") -> str:
     finally:
         os.environ.update(proxy_vars)
 
-    # 将 segments 转为 SRT
+    # 过滤 Whisper 幻觉（同一个词重复多次）并转为 SRT
+    segments = result["segments"]
+    filtered = []
+    hallucination_count = 0
+    for seg in segments:
+        text = seg["text"].strip()
+        if not text:
+            continue
+        words = text.split()
+        # 检测重复幻觉：如果某个词占总词数的 70% 以上且词数 > 5，判定为幻觉
+        if len(words) > 5:
+            from collections import Counter
+            most_common_word, most_common_count = Counter(words).most_common(1)[0]
+            if most_common_count / len(words) > 0.7:
+                hallucination_count += 1
+                continue
+        # 单条字幕过长（超过 500 字符）也可能是幻觉
+        if len(text) > 500:
+            hallucination_count += 1
+            continue
+        filtered.append(seg)
+
+    if hallucination_count:
+        click.echo(f"   ⚠️ 过滤了 {hallucination_count} 条 Whisper 幻觉字幕")
+
     srt_lines = []
-    for i, seg in enumerate(result["segments"]):
+    for i, seg in enumerate(filtered):
         idx = i + 1
         start = _format_srt_time(seg["start"])
         end = _format_srt_time(seg["end"])
@@ -59,7 +83,7 @@ def transcribe_to_srt(audio_path: str, model_name: str = "medium") -> str:
         srt_lines.append(text)
         srt_lines.append("")
 
-    click.echo(f"   ✓ 转录完成: {len(result['segments'])} 条字幕")
+    click.echo(f"   ✓ 转录完成: {len(filtered)} 条字幕（原始 {len(segments)} 条）")
     return "\n".join(srt_lines)
 
 

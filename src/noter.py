@@ -71,7 +71,7 @@ def _stream_with_progress_raw(base_url, api_key, model, system_prompt, messages,
     }
 
     try:
-        with httpx.Client(proxy=None, trust_env=False, timeout=httpx.Timeout(600.0, connect=60.0)) as http:
+        with httpx.Client(timeout=httpx.Timeout(600.0, connect=60.0)) as http:
             with http.stream("POST", url, headers=headers, json=body) as resp:
                 if resp.status_code != 200:
                     resp.read()
@@ -233,7 +233,7 @@ def call_gemini(transcript: str, subject: str, model: str) -> str:
     if base_url:
         http_opts["base_url"] = base_url
         # 第三方国内代理不需要走本地代理，直连即可
-        http_opts["httpxClient"] = httpx.Client(proxy=None, trust_env=False)
+        http_opts["httpxClient"] = httpx.Client()
     client = genai.Client(
         api_key=api_key,
         http_options=http_opts or None,
@@ -280,7 +280,7 @@ def call_gpt(transcript: str, subject: str, model: str) -> str:
         if not base_url.rstrip("/").endswith("/v1"):
             base_url = base_url.rstrip("/") + "/v1"
         client_kwargs["base_url"] = base_url
-        client_kwargs["http_client"] = httpx.Client(proxy=None, trust_env=False)
+        client_kwargs["http_client"] = httpx.Client()
 
     client = OpenAI(api_key=api_key, timeout=httpx.Timeout(600.0, connect=60.0), **client_kwargs)
     system_prompt = load_system_prompt()

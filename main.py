@@ -39,7 +39,8 @@ def _slugify(text: str) -> str:
 @click.option("--no-whisper", is_flag=True, help="不使用 Whisper，回退到 YouTube 字幕")
 @click.option("--summary", is_flag=True, help="生成视频摘要 Markdown（含建议中文标题）")
 @click.option("--batch", "batch_file", default=None, type=click.Path(exists=True), help="批量处理：指定包含多个 YouTube URL 的文本文件（每行一个）")
-def main(input_path, youtube_url, output_path, subject, model, save_json, transcript_only, subtitle_lang, list_fmts, whisper_model, no_whisper, summary, batch_file):
+@click.option("--download", is_flag=True, help="字幕生成后自动下载最高画质视频")
+def main(input_path, youtube_url, output_path, subject, model, save_json, transcript_only, subtitle_lang, list_fmts, whisper_model, no_whisper, summary, batch_file, download):
     """Lecture2Note - 将课堂录音转写文本整理为结构化笔记"""
 
     # ── 批量模式 ──
@@ -147,11 +148,18 @@ def main(input_path, youtube_url, output_path, subject, model, save_json, transc
         # 如果同时指定了 --summary，生成摘要
         if summary:
             generate_summary(youtube_url, model)
-        # 顺便打印下载地址
-        try:
-            print_formats(youtube_url)
-        except Exception:
-            click.echo("⚠️ 获取下载地址失败（可能未安装 yt-dlp），可手动安装: pip install yt-dlp")
+        # 下载视频或打印下载地址
+        if download:
+            try:
+                video_path = download_video(youtube_url)
+                click.echo(f"🎬 视频已下载: {video_path}")
+            except Exception as e:
+                click.echo(f"⚠️ 视频下载失败: {e}")
+        else:
+            try:
+                print_formats(youtube_url)
+            except Exception:
+                click.echo("⚠️ 获取下载地址失败（可能未安装 yt-dlp），可手动安装: pip install yt-dlp")
         return
 
     # 0.0.2 单独生成摘要（已有字幕时）
