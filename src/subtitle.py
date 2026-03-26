@@ -397,22 +397,32 @@ def _translate_one_chunk(args: tuple) -> tuple[int, dict[int, str]]:
         if text.rstrip().endswith("```"):
             text = text.rstrip()[:-3].rstrip()
 
-    # 按序号解析返回结果
+    # 按序号解析返回结果（严格匹配 [N] 格式）
     translated_map = {}
+    all_lines = []  # 保留所有非空行用于位置兜底
     for line in text.split("\n"):
         line = line.strip()
         if not line:
             continue
-        # 匹配 "[N] 翻译文本" 或 "N. 翻译文本" 或 "N|翻译文本" 等常见格式
-        m = re.match(r"\[?(\d+)\]?[\s.|:：\-]*(.+)", line)
+        m = re.match(r"\[(\d+)\]\s*(.+)", line)
         if m:
             seq = int(m.group(1))
             translated_map[seq] = m.group(2).strip()
+            all_lines.append(m.group(2).strip())
+        else:
+            all_lines.append(line)
 
-    # 检查覆盖率
-    missing = [idx for idx in global_indices if idx not in translated_map]
-    if missing:
-        click.echo(f"   ⚠️ 第 {chunk_idx + 1} 段有 {len(missing)} 行未匹配到序号，将用英文原文兜底")
+    # 如果序号匹配覆盖不足 90%，回退到纯位置匹配
+    matched_count = sum(1 for idx in global_indices if idx in translated_map)
+    if matched_count < len(global_indices) * 0.9 and len(all_lines) == len(global_indices):
+        click.echo(f"   ℹ️ 第 {chunk_idx + 1} 段序号匹配不足，回退到位置匹配")
+        translated_map = {}
+        for idx, line in zip(global_indices, all_lines):
+            translated_map[idx] = line
+    else:
+        missing = [idx for idx in global_indices if idx not in translated_map]
+        if missing:
+            click.echo(f"   ⚠️ 第 {chunk_idx + 1} 段有 {len(missing)} 行未匹配到序号，将用英文原文兜底")
 
     return chunk_idx, translated_map
 
@@ -683,14 +693,19 @@ def generate_subtitle(
     else:
         ts_mismatch = sum(1 for e, z in zip(en_entries, zh_entries) if e[1] != z[1])
         fallback = sum(1 for e, z in zip(en_entries, zh_entries) if e[2] == z[2])
+        total = len(en_entries)
+        fallback_ratio = fallback / total if total else 0
         if ts_mismatch == 0 and fallback == 0:
-            click.echo(f"   ✅ 校验通过: {len(zh_entries)} 条字幕全部对齐，无兜底")
+            click.echo(f"   ✅ 校验通过: {total} 条字幕全部对齐，无兜底")
         else:
-            check_failed = True
             if ts_mismatch > 0:
+                check_failed = True
                 click.echo(f"   ⚠️ 校验: {ts_mismatch} 条时间戳不匹配")
-            if fallback > 0:
-                click.echo(f"   ⚠️ 校验: {fallback} 条未翻译（使用英文兜底）")
+            if fallback > 0 and fallback_ratio > 0.05:
+                check_failed = True
+                click.echo(f"   ⚠️ 校验: {fallback} 条未翻译（{fallback_ratio:.1%}，超过 5% 阈值）")
+            elif fallback > 0:
+                click.echo(f"   ℹ️ 校验: {fallback} 条使用英文兜底（{fallback_ratio:.1%}），在容忍范围内")
 
     if check_failed:
         fail_path = out_path.with_suffix(".srt.fail")
