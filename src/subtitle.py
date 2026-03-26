@@ -471,6 +471,41 @@ def translate_srt(en_srt: str, model: str, mode: str = "bilingual") -> str:
     for translated_map in results:
         all_translated.update(translated_map)
 
+    # 定点补译：对未翻译的行及其相邻行，带上下文重新翻译
+    fallback_indices = set(i + 1 for i, (seq, ts, en_text) in enumerate(entries)
+                          if (i + 1) not in all_translated)
+    if fallback_indices:
+        # 扩展补译范围：未翻译行 + 前后各 2 行（相邻行可能也错位了）
+        EXPAND = 2
+        retranslate_indices = set()
+        for idx in fallback_indices:
+            for offset in range(-EXPAND, EXPAND + 1):
+                j = idx + offset
+                if 1 <= j <= len(entries):
+                    retranslate_indices.add(j)
+        retranslate_indices = sorted(retranslate_indices)
+
+        click.echo(f"   🔄 补译 {len(retranslate_indices)} 条（含 {len(fallback_indices)} 条未翻译 + 相邻行）...")
+        numbered_lines = [f"[{idx}] {entries[idx - 1][2]}" for idx in retranslate_indices]
+        retry_prompt = "\n".join(numbered_lines)
+
+        raw = _call_translate_llm(system_prompt, retry_prompt, model)
+        for line in raw.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            m = re.match(r"\[(\d+)\]\s*(.+)", line)
+            if m:
+                seq = int(m.group(1))
+                if seq in retranslate_indices:
+                    all_translated[seq] = m.group(2).strip()
+
+        still_missing = [idx for idx in fallback_indices if idx not in all_translated]
+        if still_missing:
+            click.echo(f"   ⚠️ 补译后仍有 {len(still_missing)} 条未翻译")
+        else:
+            click.echo(f"   ✅ 补译完成，所有行已翻译")
+
     # 将翻译结果注入回原始时间戳模板
     srt_lines = []
     for i, (seq, ts, en_text) in enumerate(entries):
