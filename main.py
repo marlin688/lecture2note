@@ -66,6 +66,10 @@ def _slugify(text: str) -> str:
 def main(input_path, youtube_url, output_path, subject, model, save_json, transcript_only, subtitle_lang, list_fmts, whisper_model, no_whisper, summary, batch_file, download, platform):
     """Lecture2Note - 将课堂录音转写文本整理为结构化笔记"""
 
+    # ── URL 清理（zsh 反斜杠转义）──
+    if youtube_url:
+        youtube_url = youtube_url.replace("\\", "")
+
     # ── 平台切换 ──
     _apply_platform(platform)
 
