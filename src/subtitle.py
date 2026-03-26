@@ -247,57 +247,28 @@ def merged_entries_to_srt(entries: list[MergedEntry]) -> str:
     return "\n".join(lines)
 
 
-def _fix_timestamp(ts_line: str) -> str:
-    """修复 LLM 可能破坏的时间戳格式，确保 HH:MM:SS,mmm --> HH:MM:SS,mmm。"""
-    match = re.match(r"(\d{1,2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{1,2}:\d{2}:\d{2},\d{3})", ts_line)
-    if not match:
-        return ts_line
-    start, end = match.group(1), match.group(2)
-    # 补齐小时位到2位
-    def pad_hours(ts):
-        parts = ts.split(":")
-        parts[0] = parts[0].zfill(2)
-        return ":".join(parts)
-    return f"{pad_hours(start)} --> {pad_hours(end)}"
+def _parse_srt_entries(srt_text: str) -> list[tuple[str, str, str]]:
+    """解析 SRT 文本为结构化列表。
 
-
-def _normalize_srt(srt_text: str, en_srt: str) -> str:
-    """规范化翻译后的 SRT：修复时间戳、确保条目数与原文一致。"""
+    Returns:
+        [(序号, 时间戳行, 文本内容), ...]
+    """
     text = srt_text.replace("\r\n", "\n").replace("\r", "\n")
     entries = re.split(r"\n\n+", text.strip())
-
-    # 从英文原版提取正确的序号和时间戳
-    en_text = en_srt.replace("\r\n", "\n").replace("\r", "\n")
-    en_entries = re.split(r"\n\n+", en_text.strip())
-
-    fixed = []
-    for i, entry in enumerate(entries):
+    result = []
+    for entry in entries:
         lines = entry.strip().split("\n")
-        if i < len(en_entries):
-            en_lines = en_entries[i].strip().split("\n")
-            # 用原版的序号和时间戳替换，只保留翻译后的文本行
-            seq = en_lines[0]
-            ts = en_lines[1]
-            text_lines = lines[2:]  # 翻译后的文本（可能1行或2行）
-            fixed.append("\n".join([seq, ts] + text_lines))
-        else:
-            # 超出原文条目数的部分，仅修复时间戳
-            if len(lines) >= 2:
-                lines[1] = _fix_timestamp(lines[1])
-            fixed.append("\n".join(lines))
-
-    return "\n\n".join(fixed) + "\n"
+        if len(lines) >= 3:
+            result.append((lines[0].strip(), lines[1].strip(), " ".join(lines[2:])))
+    return result
 
 
-def _split_srt(srt_text: str, batch_entries: int = BATCH_ENTRIES) -> list[str]:
-    """将 SRT 文本按条目数分段。每段包含 batch_entries 个条目。"""
-    # SRT 条目之间用空行分隔
-    entries = re.split(r"\n\n+", srt_text.strip())
-    chunks = []
-    for i in range(0, len(entries), batch_entries):
-        chunk = "\n\n".join(entries[i:i + batch_entries])
-        chunks.append(chunk)
-    return chunks
+def _split_text_batches(entries: list[tuple[str, str, str]], batch_size: int = BATCH_ENTRIES) -> list[list[tuple[str, str, str]]]:
+    """将解析后的 SRT 条目列表按批次分段。"""
+    batches = []
+    for i in range(0, len(entries), batch_size):
+        batches.append(entries[i:i + batch_size])
+    return batches
 
 
 def _load_translate_prompt(mode: str = "bilingual") -> str:
@@ -406,11 +377,18 @@ def _call_translate_gpt(system_prompt: str, user_message: str, model: str) -> st
     return response.choices[0].message.content
 
 
-def _translate_one_chunk(args: tuple) -> tuple[int, str]:
-    """翻译单个 SRT 分段，返回 (chunk_index, translated_srt_chunk)。"""
-    chunk_idx, srt_chunk, system_prompt, model = args
-    raw = _call_translate_llm(system_prompt, srt_chunk, model)
-    # 清理可能的 ```srt 包裹
+def _translate_one_chunk(args: tuple) -> tuple[int, dict[int, str]]:
+    """翻译单个纯文本批次，返回 (chunk_index, {全局序号: 翻译文本})。
+
+    发送格式：每行带序号前缀 "[N] 英文文本"
+    期望返回：每行带序号前缀 "[N] 中文翻译"
+    按序号匹配，而非位置匹配，确保即使 LLM 漏行/乱序也能精确对齐。
+    """
+    chunk_idx, numbered_lines, global_indices, system_prompt, model = args
+    user_message = "\n".join(numbered_lines)
+    raw = _call_translate_llm(system_prompt, user_message, model)
+
+    # 清理可能的 ``` 包裹
     text = raw.strip()
     if text.startswith("```"):
         first_nl = text.find("\n")
@@ -418,34 +396,84 @@ def _translate_one_chunk(args: tuple) -> tuple[int, str]:
             text = text[first_nl + 1:]
         if text.rstrip().endswith("```"):
             text = text.rstrip()[:-3].rstrip()
-    return chunk_idx, text
+
+    # 按序号解析返回结果
+    translated_map = {}
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        # 匹配 "[N] 翻译文本" 或 "N. 翻译文本" 或 "N|翻译文本" 等常见格式
+        m = re.match(r"\[?(\d+)\]?[\s.|:：\-]*(.+)", line)
+        if m:
+            seq = int(m.group(1))
+            translated_map[seq] = m.group(2).strip()
+
+    # 检查覆盖率
+    missing = [idx for idx in global_indices if idx not in translated_map]
+    if missing:
+        click.echo(f"   ⚠️ 第 {chunk_idx + 1} 段有 {len(missing)} 行未匹配到序号，将用英文原文兜底")
+
+    return chunk_idx, translated_map
 
 
 def translate_srt(en_srt: str, model: str, mode: str = "bilingual") -> str:
     """将英文 SRT 并发翻译为中文/双语 SRT。
 
-    Args:
-        mode: "zh" 纯中文, "bilingual" 中英双语
+    策略：
+    1. 从 SRT 中提取纯文本，每行加 [序号] 前缀发给 LLM
+    2. LLM 返回带序号的翻译，按序号精确匹配（非位置匹配）
+    3. 将翻译文本注入回原始时间戳模板
+    LLM 全程不接触时间戳，按序号对齐，双重保障杜绝错位。
     """
     system_prompt = _load_translate_prompt(mode)
-    chunks = _split_srt(en_srt)
-    total_chunks = len(chunks)
+    entries = _parse_srt_entries(en_srt)
+    batches = _split_text_batches(entries)
+    total_chunks = len(batches)
 
     click.echo(f"   📦 共 {total_chunks} 段，{MAX_CONCURRENT} 路并发翻译...")
 
-    batch_args = [(i, chunk, system_prompt, model) for i, chunk in enumerate(chunks)]
+    # 构建批次参数：每行带全局序号前缀 "[N] 文本"
+    batch_args = []
+    global_offset = 0
+    for i, batch in enumerate(batches):
+        numbered_lines = []
+        global_indices = []
+        for j, (seq, ts, text) in enumerate(batch):
+            global_idx = global_offset + j + 1  # 1-based 全局序号
+            numbered_lines.append(f"[{global_idx}] {text}")
+            global_indices.append(global_idx)
+        batch_args.append((i, numbered_lines, global_indices, system_prompt, model))
+        global_offset += len(batch)
 
     results = [None] * total_chunks
     completed = 0
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT) as executor:
         futures = {executor.submit(_translate_one_chunk, a): a[0] for a in batch_args}
         for future in as_completed(futures):
-            chunk_idx, translated = future.result()
-            results[chunk_idx] = translated
+            chunk_idx, translated_map = future.result()
+            results[chunk_idx] = translated_map
             completed += 1
             click.echo(f"   ✓ 完成 {completed}/{total_chunks} 段")
 
-    return "\n\n".join(results)
+    # 合并所有批次的翻译结果
+    all_translated = {}
+    for translated_map in results:
+        all_translated.update(translated_map)
+
+    # 将翻译结果注入回原始时间戳模板
+    srt_lines = []
+    for i, (seq, ts, en_text) in enumerate(entries):
+        global_idx = i + 1
+        zh_text = all_translated.get(global_idx, en_text)  # 匹配不上则用英文兜底
+        srt_lines.append(seq)
+        srt_lines.append(ts)
+        if mode == "bilingual":
+            srt_lines.append(en_text)
+        srt_lines.append(zh_text)
+        srt_lines.append("")
+
+    return "\n".join(srt_lines)
 
 
 def _srt_to_plain_text(srt_text: str) -> str:
@@ -642,8 +670,32 @@ def generate_subtitle(
 
     suffix = "_zh" if target_lang == "zh" else "_bilingual"
     out_path = out_dir / f"subtitle{suffix}.srt"
-    normalized = _normalize_srt(translated_srt, en_srt)
-    out_path.write_text(normalized, encoding="utf-8")
+    out_path.write_text(translated_srt, encoding="utf-8")
     click.echo(f"   📄 {label}字幕已保存: {out_path}")
+
+    # 翻译质量校验（纯代码，不消耗 token）
+    en_entries = _parse_srt_entries(en_srt)
+    zh_entries = _parse_srt_entries(translated_srt)
+    check_failed = False
+    if len(zh_entries) != len(en_entries):
+        click.echo(f"   ⚠️ 校验: 条目数不一致（英文 {len(en_entries)}，中文 {len(zh_entries)}）")
+        check_failed = True
+    else:
+        ts_mismatch = sum(1 for e, z in zip(en_entries, zh_entries) if e[1] != z[1])
+        fallback = sum(1 for e, z in zip(en_entries, zh_entries) if e[2] == z[2])
+        if ts_mismatch == 0 and fallback == 0:
+            click.echo(f"   ✅ 校验通过: {len(zh_entries)} 条字幕全部对齐，无兜底")
+        else:
+            check_failed = True
+            if ts_mismatch > 0:
+                click.echo(f"   ⚠️ 校验: {ts_mismatch} 条时间戳不匹配")
+            if fallback > 0:
+                click.echo(f"   ⚠️ 校验: {fallback} 条未翻译（使用英文兜底）")
+
+    if check_failed:
+        fail_path = out_path.with_suffix(".srt.fail")
+        out_path.rename(fail_path)
+        click.echo(f"   ❌ 校验失败，已重命名为: {fail_path}")
+        return fail_path
 
     return out_path

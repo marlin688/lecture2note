@@ -200,13 +200,14 @@ def download_video(url: str, output_dir: str | None = None) -> str:
         info = ydl.extract_info(url, download=False)
     expected_duration = info.get("duration", 0)
 
-    # 估算预期文件大小（bestvideo = 最高画质纯视频）
+    # 估算预期文件大小：让 yt-dlp 解析 bestvideo 实际选中的格式
     expected_filesize = 0
-    for fmt in info.get("formats", []):
-        if fmt.get("vcodec") != "none" and fmt.get("acodec") == "none":
-            fs = fmt.get("filesize") or fmt.get("filesize_approx") or 0
-            if fs > expected_filesize:
-                expected_filesize = fs
+    try:
+        with yt_dlp.YoutubeDL({**ydl_info_opts, "format": "bestvideo"}) as ydl_fs:
+            sel_info = ydl_fs.extract_info(url, download=False)
+            expected_filesize = sel_info.get("filesize") or sel_info.get("filesize_approx") or 0
+    except Exception:
+        pass
 
     # 检查已有视频文件是否完整
     existing = _find_existing_video(video_dir)
