@@ -696,13 +696,30 @@ def generate_cover_images(
     try:
         client = genai.Client(api_key=api_key, http_options=http_opts)
 
+        # 查找参考人像照片（cover--.jpg）
+        ref_image_path = video_dir / "cover--.jpg"
+        ref_image_part = None
+        if ref_image_path.exists():
+            click.echo(f"   📷 使用参考照片: {ref_image_path}")
+            ref_image_data = ref_image_path.read_bytes()
+            ref_image_part = genai.types.Part.from_bytes(
+                data=ref_image_data,
+                mime_type="image/jpeg",
+            )
+
         for i in range(num_images):
             title = titles[i] if i < len(titles) else titles[0]
-            prompt = cover_prompt_template.format(
+            prompt_text = cover_prompt_template.format(
                 title=title,
                 summary=summary_text[:500],
                 index=i + 1,
             )
+
+            # 构建 contents：有参考照片时图文混合，否则纯文本
+            if ref_image_part:
+                contents = [ref_image_part, prompt_text]
+            else:
+                contents = prompt_text
 
             click.echo(f"   🖼️ 生成封面 {i + 1}/{num_images}：{title[:30]}...")
             try:
@@ -711,7 +728,7 @@ def generate_cover_images(
                     try:
                         response = client.models.generate_content(
                             model=model,
-                            contents=prompt,
+                            contents=contents,
                             config=genai.types.GenerateContentConfig(
                                 response_modalities=["IMAGE", "TEXT"],
                             ),
