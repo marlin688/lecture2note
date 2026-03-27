@@ -624,6 +624,154 @@ def generate_summary(
     return out_path
 
 
+def _extract_titles_from_summary(summary_text: str) -> list[str]:
+    """从摘要 Markdown 中提取建议中文标题列表。"""
+    titles = []
+    in_title_section = False
+    for line in summary_text.split("\n"):
+        if "建议中文标题" in line:
+            in_title_section = True
+            continue
+        if in_title_section:
+            if line.startswith("##"):
+                break
+            if line.strip().startswith("- "):
+                title = line.strip().lstrip("- ").strip()
+                if title:
+                    titles.append(title)
+    return titles if titles else ["视频封面"]
+
+
+def generate_cover_images(
+    url: str,
+    model: str | None = None,
+    num_images: int = 3,
+) -> list[Path]:
+    """基于视频摘要生成 B 站风格封面图。
+
+    Args:
+        url: YouTube 视频 URL
+        model: 支持图片生成的 Gemini 模型
+        num_images: 生成封面数量（默认 3）
+
+    Returns:
+        生成的封面图路径列表
+    """
+    from google import genai
+    import httpx
+
+    video_id = extract_video_id(url)
+    video_dir = SUBTITLE_DIR / video_id
+
+    # 读取摘要
+    summary_path = video_dir / "summary.md"
+    if not summary_path.exists():
+        raise click.ClickException("未找到摘要文件，请先用 --summary 生成摘要")
+    summary_text = summary_path.read_text(encoding="utf-8")
+    titles = _extract_titles_from_summary(summary_text)
+
+    # 加载 prompt 模板
+    cover_prompt_template = (PROMPTS_DIR / "cover_image_system.md").read_text(encoding="utf-8")
+
+    # 图片生成使用独立配置（GEMINI_IMAGE_*），与文本翻译的 GEMINI_* 分开
+    if model is None:
+        model = os.environ.get("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image-preview")
+
+    # 设置 Gemini 客户端（优先使用图片专用配置，回退到通用 Gemini 配置）
+    api_key = os.environ.get("GEMINI_IMAGE_API_KEY") or os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        raise click.ClickException("未设置 GEMINI_IMAGE_API_KEY 或 GEMINI_API_KEY")
+    base_url = os.environ.get("GEMINI_IMAGE_BASE_URL") or os.environ.get("GEMINI_BASE_URL")
+    http_opts = {"httpxClient": httpx.Client(timeout=httpx.Timeout(300.0, connect=30.0))}
+    if base_url:
+        http_opts["base_url"] = base_url
+
+    proxy_vars = {}
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        if key in os.environ:
+            proxy_vars[key] = os.environ.pop(key)
+
+    click.echo(f"🎨 正在生成 {num_images} 张 B 站风格封面 (模型: {model})...")
+    generated_paths = []
+    try:
+        client = genai.Client(api_key=api_key, http_options=http_opts)
+
+        for i in range(num_images):
+            title = titles[i] if i < len(titles) else titles[0]
+            prompt = cover_prompt_template.format(
+                title=title,
+                summary=summary_text[:500],
+                index=i + 1,
+            )
+
+            click.echo(f"   🖼️ 生成封面 {i + 1}/{num_images}：{title[:30]}...")
+            try:
+                response = None
+                for attempt in range(1, 3):
+                    try:
+                        response = client.models.generate_content(
+                            model=model,
+                            contents=prompt,
+                            config=genai.types.GenerateContentConfig(
+                                response_modalities=["IMAGE", "TEXT"],
+                            ),
+                        )
+                        break
+                    except Exception as retry_err:
+                        if attempt < 2:
+                            click.echo(f"   ⚠️ 第 {attempt} 次失败，重试...")
+                        else:
+                            raise retry_err
+                if response is None:
+                    continue
+
+                # 从响应中提取图片（支持 inline 数据和 URL 两种格式）
+                image_saved = False
+                if response.candidates and response.candidates[0].content:
+                    for part in response.candidates[0].content.parts:
+                        # 方式1：inline 图片数据
+                        if part.inline_data and part.inline_data.data:
+                            mime = part.inline_data.mime_type or "image/png"
+                            ext = ".png" if "png" in mime else ".jpg"
+                            cover_path = video_dir / f"cover_{i + 1}{ext}"
+                            cover_path.write_bytes(part.inline_data.data)
+                            generated_paths.append(cover_path)
+                            size_kb = cover_path.stat().st_size / 1024
+                            click.echo(f"   ✅ 封面已保存: {cover_path} ({size_kb:.0f}KB)")
+                            image_saved = True
+                            break
+                        # 方式2：中转平台返回 markdown 图片链接
+                        if part.text:
+                            url_match = re.search(r'!\[.*?\]\((https?://\S+)\)', part.text)
+                            if url_match:
+                                img_url = url_match.group(1)
+                                try:
+                                    img_resp = httpx.get(img_url, timeout=30)
+                                    if img_resp.status_code == 200 and len(img_resp.content) > 1000:
+                                        ct = img_resp.headers.get("content-type", "")
+                                        ext = ".png" if "png" in ct else ".jpg"
+                                        cover_path = video_dir / f"cover_{i + 1}{ext}"
+                                        cover_path.write_bytes(img_resp.content)
+                                        generated_paths.append(cover_path)
+                                        size_kb = cover_path.stat().st_size / 1024
+                                        click.echo(f"   ✅ 封面已保存: {cover_path} ({size_kb:.0f}KB)")
+                                        image_saved = True
+                                        break
+                                except Exception as dl_err:
+                                    click.echo(f"   ⚠️ 图片下载失败: {dl_err}")
+
+                if not image_saved:
+                    click.echo(f"   ⚠️ 封面 {i + 1} 生成失败（未返回图片数据）")
+
+            except Exception as e:
+                click.echo(f"   ⚠️ 封面 {i + 1} 生成失败: {e}")
+
+    finally:
+        os.environ.update(proxy_vars)
+
+    return generated_paths
+
+
 def generate_subtitle(
     url: str,
     model: str,

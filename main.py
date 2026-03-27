@@ -63,7 +63,8 @@ def _slugify(text: str) -> str:
 @click.option("--batch", "batch_file", default=None, type=click.Path(exists=True), help="批量处理：指定包含多个 YouTube URL 的文本文件（每行一个）")
 @click.option("--download", is_flag=True, help="字幕生成后自动下载最高画质视频")
 @click.option("--platform", default=None, help="API 中转平台 (tuzi/itssx)，覆盖 .env 中的 API_PLATFORM")
-def main(input_path, youtube_url, output_path, subject, model, save_json, transcript_only, subtitle_lang, list_fmts, whisper_model, no_whisper, summary, batch_file, download, platform):
+@click.option("--cover", is_flag=True, help="生成 AI 封面图（3 张 B 站风格，需要 Gemini）")
+def main(input_path, youtube_url, output_path, subject, model, save_json, transcript_only, subtitle_lang, list_fmts, whisper_model, no_whisper, summary, batch_file, download, platform, cover):
     """Lecture2Note - 将课堂录音转写文本整理为结构化笔记"""
 
     # ── URL 清理（zsh 反斜杠转义）──
@@ -179,6 +180,13 @@ def main(input_path, youtube_url, output_path, subject, model, save_json, transc
         # 如果同时指定了 --summary，生成摘要
         if summary:
             generate_summary(youtube_url, model)
+        # 生成 AI 封面
+        if cover:
+            from src.subtitle import generate_cover_images
+            try:
+                generate_cover_images(youtube_url)
+            except Exception as e:
+                click.echo(f"⚠️ 封面生成失败: {e}")
         # 下载视频或打印下载地址
         if download:
             try:
@@ -194,12 +202,29 @@ def main(input_path, youtube_url, output_path, subject, model, save_json, transc
         return
 
     # 0.0.2 单独生成摘要（已有字幕时）
-    if summary:
+    if summary and not subtitle_lang:
         if not youtube_url:
             raise click.UsageError("--summary 需要通过 -u 指定 YouTube 视频 URL")
         if model is None:
             model = "claude-sonnet-4-5-20250929"
         generate_summary(youtube_url, model)
+        if cover:
+            from src.subtitle import generate_cover_images
+            try:
+                generate_cover_images(youtube_url)
+            except Exception as e:
+                click.echo(f"⚠️ 封面生成失败: {e}")
+        return
+
+    # 0.0.3 单独生成封面（已有摘要时）
+    if cover and not subtitle_lang and not summary:
+        if not youtube_url:
+            raise click.UsageError("--cover 需要通过 -u 指定 YouTube 视频 URL")
+        from src.subtitle import generate_cover_images
+        try:
+            generate_cover_images(youtube_url)
+        except Exception as e:
+            click.echo(f"⚠️ 封面生成失败: {e}")
         return
 
     # 0.1 如果提供了 YouTube URL，先提取 Transcript
