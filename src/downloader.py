@@ -276,4 +276,62 @@ def download_video(url: str, output_dir: str | None = None) -> str:
 
     size_mb = video_path.stat().st_size / (1024 * 1024)
     click.echo(f"   ✅ 视频已保存: {filename} ({size_mb:.1f}MB)")
+
+    # 检测视频是否有音频轨道，没有则自动合并目录下的 audio.m4a
+    video_path = Path(filename)
+    has_audio = _check_has_audio(video_path)
+    if not has_audio:
+        audio_path = video_dir / "audio.m4a"
+        if audio_path.exists():
+            merged = _merge_audio(video_path, audio_path)
+            if merged:
+                filename = str(merged)
+
     return filename
+
+
+def _check_has_audio(video_path: Path) -> bool:
+    """用 ffprobe 检测视频文件是否包含音频轨道。"""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-select_streams", "a",
+             "-show_entries", "stream=codec_type", "-of", "csv=p=0",
+             str(video_path)],
+            capture_output=True, text=True, timeout=10,
+        )
+        return "audio" in result.stdout
+    except Exception:
+        return True  # ffprobe 不可用时保守跳过
+
+
+def _merge_audio(video_path: Path, audio_path: Path) -> Path | None:
+    """将纯视频和音频合并，返回合并后的文件路径。"""
+    # 输出格式：mp4 容器兼容性最好
+    merged_path = video_path.with_name(video_path.stem + "_merged.mp4")
+    click.echo(f"   🔄 视频无音频轨道，正在合并 {audio_path.name}...")
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", str(video_path), "-i", str(audio_path),
+             "-c:v", "copy", "-c:a", "copy", "-map", "0:v:0", "-map", "1:a:0",
+             str(merged_path)],
+            capture_output=True, text=True, timeout=300,
+        )
+        if result.returncode == 0 and merged_path.exists() and merged_path.stat().st_size > 0:
+            # 合并成功，删除无音频的原文件
+            video_path.unlink()
+            # 重命名去掉 _merged 后缀
+            final_path = merged_path.with_name(video_path.stem + ".mp4")
+            merged_path.rename(final_path)
+            size_mb = final_path.stat().st_size / (1024 * 1024)
+            click.echo(f"   ✅ 音视频合并完成: {final_path.name} ({size_mb:.1f}MB)")
+            return final_path
+        else:
+            click.echo(f"   ⚠️ 合并失败: {result.stderr[:200]}")
+            if merged_path.exists():
+                merged_path.unlink()
+            return None
+    except Exception as e:
+        click.echo(f"   ⚠️ 合并失败: {e}")
+        if merged_path.exists():
+            merged_path.unlink()
+        return None
