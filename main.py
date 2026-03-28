@@ -285,7 +285,8 @@ def main(input_path, youtube_url, output_path, subject, model, save_json, transc
     notes = process_transcript(transcript, subject, model)
 
     # 3. 组装 Markdown 并保存
-    OUTPUT_DIR.mkdir(exist_ok=True)
+    notes_dir = OUTPUT_DIR / "notes"
+    notes_dir.mkdir(parents=True, exist_ok=True)
 
     if "_raw_markdown" in notes:
         # 模型直接输出了 Markdown，跳过 assembler
@@ -299,7 +300,7 @@ def main(input_path, youtube_url, output_path, subject, model, save_json, transc
                     title = line.lstrip("# ").strip()
                     break
             filename = _slugify(title) + ".md"
-            output_path = OUTPUT_DIR / filename
+            output_path = notes_dir / filename
         else:
             output_path = Path(output_path)
     else:
@@ -310,7 +311,7 @@ def main(input_path, youtube_url, output_path, subject, model, save_json, transc
         if output_path is None:
             title = notes.get("title", "untitled")
             filename = _slugify(title) + ".md"
-            output_path = OUTPUT_DIR / filename
+            output_path = notes_dir / filename
         else:
             output_path = Path(output_path)
 
