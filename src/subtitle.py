@@ -537,11 +537,13 @@ def proofread_en_srt(en_srt: str, zh_srt: str, model: str) -> str:
         click.echo("   ⚠️ 中英条目数不一致，跳过校对")
         return en_srt
 
-    # 分批：每批 100 条
+    # 分批：每批 100 条，4 路并发
     BATCH_SIZE = 100
     all_corrections: dict[int, str] = {}
     total_batches = (len(en_entries) + BATCH_SIZE - 1) // BATCH_SIZE
 
+    # 构建批次参数
+    batch_args = []
     for batch_idx in range(total_batches):
         start = batch_idx * BATCH_SIZE
         end = min(start + BATCH_SIZE, len(en_entries))
@@ -551,11 +553,14 @@ def proofread_en_srt(en_srt: str, zh_srt: str, model: str) -> str:
             en_text = en_entries[i][2]
             zh_text = zh_entries[i][2]
             numbered_lines.append(f"[{seq}] {en_text} ||| {zh_text}")
+        batch_args.append((batch_idx, "\n".join(numbered_lines), system_prompt, model))
 
-        user_message = "\n".join(numbered_lines)
-        raw = _call_translate_llm(system_prompt, user_message, model)
+    click.echo(f"   📦 共 {total_batches} 批，{MAX_CONCURRENT} 路并发校对...")
 
-        # 解析修正结果
+    def _proofread_one(args):
+        batch_idx, user_message, sys_prompt, mdl = args
+        raw = _call_translate_llm(sys_prompt, user_message, mdl)
+        corrections = {}
         for line in raw.strip().split("\n"):
             line = line.strip()
             if not line:
@@ -564,10 +569,19 @@ def proofread_en_srt(en_srt: str, zh_srt: str, model: str) -> str:
             if m:
                 seq = int(m.group(1))
                 corrected = m.group(2).strip()
-                # 去掉可能残留的 ||| 部分
                 if "|||" in corrected:
                     corrected = corrected.split("|||")[0].strip()
-                all_corrections[seq] = corrected
+                corrections[seq] = corrected
+        return batch_idx, corrections
+
+    completed = 0
+    with ThreadPoolExecutor(max_workers=MAX_CONCURRENT) as executor:
+        futures = {executor.submit(_proofread_one, a): a[0] for a in batch_args}
+        for future in as_completed(futures):
+            batch_idx, corrections = future.result()
+            all_corrections.update(corrections)
+            completed += 1
+            click.echo(f"   ✓ 校对完成 {completed}/{total_batches} 批")
 
     if not all_corrections:
         click.echo("   ✅ 校对完成：无需修正")
