@@ -48,7 +48,7 @@ def _slugify(text: str) -> str:
 
 
 @click.command()
-@click.option("-i", "--input", "input_path", default=None, type=click.Path(exists=True), help="输入 txt 文件路径")
+@click.option("-i", "--input", "input_path", default=None, type=click.Path(exists=True), help="输入文件路径（支持 txt 文本或 mp3/m4a/wav 音频）")
 @click.option("-u", "--url", "youtube_url", default=None, help="YouTube 视频 URL（自动提取 Transcript）")
 @click.option("-o", "--output", "output_path", default=None, type=click.Path(), help="输出 md 文件路径")
 @click.option("-s", "--subject", default="", help="课程学科")
@@ -236,7 +236,27 @@ def main(input_path, youtube_url, output_path, subject, model, save_json, transc
         if transcript_only:
             return
     else:
-        transcript = Path(input_path).read_text(encoding="utf-8")
+        input_file = Path(input_path)
+        audio_exts = {".mp3", ".m4a", ".wav", ".flac", ".ogg", ".webm", ".aac", ".wma"}
+        if input_file.suffix.lower() in audio_exts:
+            # 音频文件：先用 Whisper 转录为文本
+            from src.whisper_transcriber import transcribe_to_srt
+            click.echo(f"🎙️ 检测到音频文件，使用 Whisper ({whisper_model}) 转录...")
+            srt_text = transcribe_to_srt(str(input_file), model_name=whisper_model)
+            # 从 SRT 提取纯文本作为 transcript
+            import re
+            transcript_lines = []
+            for entry in re.split(r"\n\n+", srt_text.strip()):
+                parts = entry.strip().split("\n")
+                if len(parts) >= 3:
+                    transcript_lines.append(" ".join(parts[2:]))
+            transcript = "\n".join(transcript_lines)
+            # 保存转录文本
+            txt_path = input_file.with_suffix(".txt")
+            txt_path.write_text(transcript, encoding="utf-8")
+            click.echo(f"📄 转录文本已保存: {txt_path}")
+        else:
+            transcript = input_file.read_text(encoding="utf-8")
 
     # 0.2 确定模型：优先命令行参数 > 环境变量 > 硬编码默认
     if model is None:
