@@ -251,10 +251,15 @@ def main(input_path, youtube_url, output_path, subject, model, save_json, transc
                 if len(parts) >= 3:
                     transcript_lines.append(" ".join(parts[2:]))
             transcript = "\n".join(transcript_lines)
-            # 保存转录文本
+            # 保存转录文本（音频同目录 + output/notes/ 双份）
             txt_path = input_file.with_suffix(".txt")
             txt_path.write_text(transcript, encoding="utf-8")
             click.echo(f"📄 转录文本已保存: {txt_path}")
+            notes_dir = OUTPUT_DIR / "notes"
+            notes_dir.mkdir(parents=True, exist_ok=True)
+            notes_txt = notes_dir / f"{input_file.stem}_transcript.txt"
+            notes_txt.write_text(transcript, encoding="utf-8")
+            click.echo(f"📄 转录文本副本: {notes_txt}")
         else:
             transcript = input_file.read_text(encoding="utf-8")
 
