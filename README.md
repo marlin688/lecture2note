@@ -12,12 +12,14 @@
 
 ### 字幕模式（`--subtitle`）
 
-- **Whisper 本地转录** — 使用 mlx-whisper（Apple Silicon GPU 加速），断句准确、自带标点
+- **Whisper 本地转录** — 使用 mlx-whisper（Apple Silicon GPU 加速），词级时间戳 + 智能断句（按标��/转折词/停顿/长度分层断句，标点结尾率 91%+）
 - **字幕翻译** — 支持中文（`zh`）、中英双语（`bilingual`）、纯英文（`en`）三种输出
 - **4 路并发翻译** — 长字幕自动分段，4 路并发调用 LLM 翻译，速度快
 - **质量回退** — Whisper 转录质量不佳时自动回退到 YouTube 字幕
 - **YouTube 字幕保留** — 同时保存 YouTube 原始英文字幕供对照
+- **AI 封面生成** — 使用 Gemini 生成 B 站风格封面图（影视飓风/何同学美学），支持参考人像照片
 - **视频封面下载** — 自动保存视频最高分辨率封面图
+- **视频下载 + 自动合并** — 下载最高画质视频，纯视频自动合并音频轨道
 - **视频下载地址** — 列出所有分辨率的下载格式，方便配合字幕离线观看
 
 ### 摘要模式（`--summary`）
@@ -35,6 +37,7 @@
 
 ### 笔记模式（`-i` / `-u`）
 
+- **本地音频支持** — 直接输入 mp3/m4a/wav 等音频文件，自动 Whisper 转录后生成笔记
 - **ASR 纠错** — 自动修正语音识别的同音替换、术语误识别等错误
 - **智能降噪** — 去除口头禅、重复、课堂管理等无关内容
 - **逻辑重组** — 按知识体系而非时间顺序组织笔记结构
@@ -112,9 +115,22 @@ python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --summary
 python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --subtitle zh --summary
 ```
 
+#### 封面生成
+
+```bash
+# 生成 AI 封面（需配合 --subtitle 或 --summary）
+python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --subtitle zh --cover
+
+# 单独生成封面（需先有摘要）
+python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --cover
+```
+
 #### 笔记模式
 
 ```bash
+# 从本地音频文件生成笔记
+python main.py -i 录音.m4a
+
 # 从本地转录文本生成笔记
 python main.py -i 转录文本.txt
 
@@ -197,7 +213,7 @@ python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --list-formats
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `-i, --input` | 输入转录文本文件路径（与 `-u` 二选一） | — |
+| `-i, --input` | 输入文件路径：文本(.txt) 或音频(.mp3/.m4a/.wav)（与 `-u` 二选一） | — |
 | `-u, --url` | YouTube 视频 URL（与 `-i` 二选一） | — |
 | `-o, --output` | 输出 Markdown 文件路径 | 自动生成 |
 | `-s, --subject` | 课程学科 | — |
@@ -212,6 +228,7 @@ python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --list-formats
 | `--batch` | 批量处理：指定包含多个 YouTube URL 的文本文件 | — |
 | `--max-res` | 下载视频的最大分辨率（`720p`/`1080p`/`2k`/`4k`） | `1080p` |
 | `--platform` | API 中转平台（`tuzi` / `itssx`），覆盖 `.env` 中的 `API_PLATFORM` | `.env` 配置 |
+| `--cover` | 生成 AI 封面图（3 张 B 站风格，需要 Gemini） | `false` |
 | `--list-formats` | 列出视频可用的下载格式和地址 | `false` |
 
 ## 项目结构
@@ -225,15 +242,16 @@ lecture2note/
 │   ├── noter.py             # 核心：分片、调用 LLM API、JSON 解析、合并
 │   ├── assembler.py         # JSON → Markdown 格式组装
 │   ├── transcriber.py       # YouTube Transcript API 提取
-│   ├── whisper_transcriber.py # mlx-whisper 转录 + 音频/封面下载
-│   ├── subtitle.py          # 字幕翻译（分段、并发、SRT 生成）
-│   └── downloader.py        # YouTube 视频格式信息获取 + 视频下载
+│   ├── whisper_transcriber.py # mlx-whisper 转录 + 智能断句 + 音频下载
+│   ├── subtitle.py          # 字幕翻译 + 摘要生成 + AI 封面生成
+│   └── downloader.py        # 视频下载 + 完整性校验 + 音视频自动合并
 ├── prompts/
-│   ├── note_system.md       # 笔记生成系统提示词
-│   ├── merge_system.md      # 字幕片段合并提示词
+│   ├── note_system.md           # 笔记生成系统提示词
+│   ├── merge_system.md          # 字幕片段合并提示词
 │   ├── translate_zh_system.md   # 中文字幕翻译提示词
 │   ├── translate_system.md      # 中英双语字幕翻译提示词
-│   └── summary_system.md       # 视频摘要生成提示词
+│   ├── summary_system.md        # 视频摘要生成提示词（B 站标题 + 关键词）
+│   └── cover_image_system.md    # AI 封面生成提示词（影视飓风风格）
 └── output/
     ├── transcript/              # YouTube 字幕提取结果
     ├── subtitle/{video_id}/     # 字幕输出（按视频 ID 分目录）
@@ -244,8 +262,10 @@ lecture2note/
     │   ├── subtitle_zh.srt      # 中文翻译字幕
     │   ├── subtitle_bilingual.srt   # 中英双语字幕
     │   ├── summary.md             # 视频摘要
-    │   └── *.mp4                  # 下载的视频文件
-    └── *.md                     # 生成的笔记
+    │   ├── cover--*.jpg          # AI 生成的封面图
+    │   └── *.mp4                  # 下载的视频文件（自动合并音频）
+    └── notes/                    # 生成的笔记
+        └── *.md
 ```
 
 ## 工作原理
@@ -257,7 +277,9 @@ YouTube URL
     │
     ├─► yt-dlp 下载音频 (m4a) + 封面图
     │
-    ├─► mlx-whisper GPU 转录 → subtitle_en.srt
+    ├─► mlx-whisper GPU 转录（词级时间戳）
+    │   → 智能断句（标点/转折词/停顿/长度分层）
+    │   → subtitle_en.srt
     │   （质量不佳时自动回退 YouTube 字幕）
     │
     ├─► 同时保存 YouTube 原始字幕 → subtitle_en_youtube.srt
@@ -266,7 +288,9 @@ YouTube URL
     │
     ├─► [可选] LLM 生成视频摘要 → summary.md (--summary)
     │
-    ├─► [可选] 下载最高画质视频 (--download)
+    ├─► [可选] AI 封面生成 (--cover, Gemini)
+    │
+    ├─► [可选] 下载最高画质视频 + 自动合并音频 (--download)
     │
     └─► 列出视频下载格式（未指定 --download 时）
 ```
@@ -289,8 +313,9 @@ URL 列表文件 (urls.txt)
 ### 笔记工作流
 
 ```
-YouTube URL / 转录文本 (.txt)
+YouTube URL / 转录文本 (.txt) / 音频文件 (.mp3/.m4a/.wav)
     │
+    ├─► [音频] mlx-whisper 转录 → 纯文本
     ├─► [YouTube] 提取 Transcript
     │
     ├─► 文本分片（超过 80,000 字符时按段落边界切分）
@@ -304,7 +329,8 @@ YouTube URL / 转录文本 (.txt)
 
 ## 技术栈
 
-- [mlx-whisper](https://github.com/ml-explore/mlx-examples) — Apple Silicon GPU 加速的 Whisper 语音转录
+- [mlx-whisper](https://github.com/ml-explore/mlx-examples) — Apple Silicon GPU 加速的 Whisper 语音转录（词级时间戳）
+- [stable-ts](https://github.com/jianfch/stable-ts) — Whisper 结果后处理（幻觉过滤辅助）
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) — YouTube 音频下载与视频格式获取
 - [Anthropic Python SDK](https://github.com/anthropics/anthropic-sdk-python) — Claude API
 - [Google GenAI SDK](https://github.com/googleapis/python-genai) — Gemini API
