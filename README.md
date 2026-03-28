@@ -15,6 +15,7 @@
 - **Whisper 本地转录** — 使用 mlx-whisper（Apple Silicon GPU 加速），词级时间戳 + 智能断句（按标��/转折词/停顿/长度分层断句，标点结尾率 91%+）
 - **字幕翻译** — 支持中文（`zh`）、中英双语（`bilingual`）、纯英文（`en`）三种输出
 - **4 路并发翻译** — 长字幕自动分段，4 路并发调用 LLM 翻译，速度快
+- **英文字幕校对** — 翻译后参考中文自动修正 Whisper ASR 错误（SISC→CISC、kuda→CUDA 等）
 - **质量回退** — Whisper 转录质量不佳时自动回退到 YouTube 字幕
 - **YouTube 字幕保留** — 同时保存 YouTube 原始英文字幕供对照
 - **AI 封面生成** — 使用 Gemini 生成 B 站风格封面图（影视飓风/何同学美学），支持参考人像照片
@@ -251,13 +252,14 @@ lecture2note/
 │   ├── translate_zh_system.md   # 中文字幕翻译提示词
 │   ├── translate_system.md      # 中英双语字幕翻译提示词
 │   ├── summary_system.md        # 视频摘要生成提示词（B 站标题 + 关键词）
-│   └── cover_image_system.md    # AI 封面生成提示词（影视飓风风格）
+│   ├── cover_image_system.md    # AI 封面生成提示词（影视飓风风格）
+│   └── proofread_system.md      # 英文字幕 ASR 错误校对提示词
 └── output/
     ├── transcript/              # YouTube 字幕提取结果
     ├── subtitle/{video_id}/     # 字幕输出（按视频 ID 分目录）
     │   ├── audio.m4a            # 下载的音频
     │   ├── cover.jpg            # 视频封面
-    │   ├── subtitle_en.srt      # Whisper 英文字幕
+    │   ├── subtitle_en.srt      # Whisper 英文字幕（已校对）
     │   ├── subtitle_en_youtube.srt  # YouTube 原始英文字幕
     │   ├── subtitle_zh.srt      # 中文翻译字幕
     │   ├── subtitle_bilingual.srt   # 中英双语字幕
@@ -285,6 +287,8 @@ YouTube URL
     ├─► 同时保存 YouTube 原始字幕 → subtitle_en_youtube.srt
     │
     ├─► LLM 4 路并发翻译 → subtitle_zh.srt / subtitle_bilingual.srt
+    │
+    ├─► LLM 英文校对（参考中文翻译反向修正 ASR 错误）→ 更新 subtitle_en.srt
     │
     ├─► [可选] LLM 生成视频摘要 → summary.md (--summary)
     │

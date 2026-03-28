@@ -521,6 +521,73 @@ def translate_srt(en_srt: str, model: str, mode: str = "bilingual") -> str:
     return "\n".join(srt_lines)
 
 
+def proofread_en_srt(en_srt: str, zh_srt: str, model: str) -> str:
+    """参考中文翻译校对英文字幕中的 ASR 错误，返回修正后的英文 SRT。
+
+    策略：将英文+中文逐行配对发给 LLM，LLM 只返回需要修正的行。
+    分批处理以控制单次请求大小。
+    """
+    prompt_path = Path(__file__).parent.parent / "prompts" / "proofread_system.md"
+    system_prompt = prompt_path.read_text(encoding="utf-8")
+
+    en_entries = _parse_srt_entries(en_srt)
+    zh_entries = _parse_srt_entries(zh_srt)
+
+    if len(en_entries) != len(zh_entries):
+        click.echo("   ⚠️ 中英条目数不一致，跳过校对")
+        return en_srt
+
+    # 分批：每批 100 条
+    BATCH_SIZE = 100
+    all_corrections: dict[int, str] = {}
+    total_batches = (len(en_entries) + BATCH_SIZE - 1) // BATCH_SIZE
+
+    for batch_idx in range(total_batches):
+        start = batch_idx * BATCH_SIZE
+        end = min(start + BATCH_SIZE, len(en_entries))
+        numbered_lines = []
+        for i in range(start, end):
+            seq = i + 1
+            en_text = en_entries[i][2]
+            zh_text = zh_entries[i][2]
+            numbered_lines.append(f"[{seq}] {en_text} ||| {zh_text}")
+
+        user_message = "\n".join(numbered_lines)
+        raw = _call_translate_llm(system_prompt, user_message, model)
+
+        # 解析修正结果
+        for line in raw.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            m = re.match(r"\[(\d+)\]\s*(.+)", line)
+            if m:
+                seq = int(m.group(1))
+                corrected = m.group(2).strip()
+                # 去掉可能残留的 ||| 部分
+                if "|||" in corrected:
+                    corrected = corrected.split("|||")[0].strip()
+                all_corrections[seq] = corrected
+
+    if not all_corrections:
+        click.echo("   ✅ 校对完成：无需修正")
+        return en_srt
+
+    # 应用修正到英文 SRT
+    click.echo(f"   ✏️ 校对修正 {len(all_corrections)} 条")
+    srt_lines = []
+    for i, (seq, ts, en_text) in enumerate(en_entries):
+        global_idx = i + 1
+        corrected = all_corrections.get(global_idx)
+        text = corrected if corrected else en_text
+        srt_lines.append(str(seq))
+        srt_lines.append(ts)
+        srt_lines.append(text)
+        srt_lines.append("")
+
+    return "\n".join(srt_lines)
+
+
 def _srt_to_plain_text(srt_text: str) -> str:
     """将 SRT 字幕提取为纯文本（去掉序号和时间戳）。"""
     lines = []
@@ -882,6 +949,14 @@ def generate_subtitle(
     out_path = out_dir / f"subtitle{suffix}.srt"
     out_path.write_text(translated_srt, encoding="utf-8")
     click.echo(f"   📄 {label}字幕已保存: {out_path}")
+
+    # 英文字幕校对：参考中文翻译修正 Whisper ASR 错误
+    click.echo("🔍 正在校对英文字幕...")
+    proofread_srt = proofread_en_srt(en_srt, translated_srt, model)
+    if proofread_srt != en_srt:
+        en_path.write_text(proofread_srt, encoding="utf-8")
+        click.echo(f"   📄 英文字幕已更新: {en_path}")
+        en_srt = proofread_srt
 
     # 翻译质量校验（纯代码，不消耗 token）
     en_entries = _parse_srt_entries(en_srt)
