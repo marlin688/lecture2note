@@ -8,10 +8,10 @@
 #https://www.youtube.com/watch?v=wl1UEnIOVek
 #https://www.youtube.com/watch?v=EV6xb4xY708
 #https://www.youtube.com/watch?v=sTz2tXG1T0c
-https://www.youtube.com/watch?v=OCdwWfVoQ-Q
-https://www.youtube.com/watch?v=kgTWKjbnrBA
-https://www.youtube.com/watch?v=v0jYDgaVzlk
-https://www.youtube.com/watch?v=o_60Yhb79W8
+#https://www.youtube.com/watch?v=OCdwWfVoQ-Q
+#https://www.youtube.com/watch?v=kgTWKjbnrBA
+#https://www.youtube.com/watch?v=v0jYDgaVzlk
+#https://www.youtube.com/watch?v=o_60Yhb79W8
 https://www.youtube.com/watch?v=LXrqmQrscf0
 https://www.youtube.com/watch?v=LcOM-nZdqxw
 https://www.youtube.com/watch?v=lOVcPooetrM

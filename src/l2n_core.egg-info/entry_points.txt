@@ -1,0 +1,2 @@
+[console_scripts]
+lecture2note = l2n.cli:main

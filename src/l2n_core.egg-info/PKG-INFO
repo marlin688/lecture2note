@@ -1,0 +1,15 @@
+Metadata-Version: 2.4
+Name: l2n-core
+Version: 0.1.0
+Summary: Lecture2Note core library: YouTube download, Whisper transcription, subtitle translation & proofreading
+Requires-Python: >=3.11
+Requires-Dist: anthropic>=0.84.0
+Requires-Dist: google-genai>=1.67.0
+Requires-Dist: openai>=2.26.0
+Requires-Dist: python-dotenv>=1.2.2
+Requires-Dist: click>=8.3.1
+Requires-Dist: youtube-transcript-api>=1.2.4
+Requires-Dist: yt-dlp>=2026.3.17
+Requires-Dist: httpx
+Provides-Extra: whisper
+Requires-Dist: mlx-whisper>=0.4.3; (platform_machine == "arm64" and sys_platform == "darwin") and extra == "whisper"
