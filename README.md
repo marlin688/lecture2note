@@ -237,23 +237,35 @@ python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --list-formats
 ```
 lecture2note/
 ├── main.py                  # CLI 入口
+├── mcp_server.py            # MCP Server（将核心能力暴露为工具）
+├── pyproject.toml           # 包配置（pip install -e .）
 ├── requirements.txt         # Python 依赖
 ├── .env.example             # 环境变量模板
+├── .claude/
+│   ├── agents/              # Claude Code Agent 定义
+│   │   ├── subtitle-agent.md    # 字幕生成流水线 agent
+│   │   ├── note-agent.md        # 笔记生成流水线 agent
+│   │   └── batch-agent.md       # 批量处理 agent
+│   └── commands/            # Claude Code Skill 定义（/slash 命令）
+│       ├── subtitle-translate.md  # 字幕翻译 skill
+│       ├── subtitle-proofread.md  # 字幕校对 skill
+│       └── note-generate.md       # 笔记生成 skill
 ├── src/
-│   ├── noter.py             # 核心：分片、调用 LLM API、JSON 解析、合并
-│   ├── assembler.py         # JSON → Markdown 格式组装
-│   ├── transcriber.py       # YouTube Transcript API 提取
-│   ├── whisper_transcriber.py # mlx-whisper 转录 + 智能断句 + 音频下载
-│   ├── subtitle.py          # 字幕翻译 + 摘要生成 + AI 封面生成
-│   └── downloader.py        # 视频下载 + 完整性校验 + 音视频自动合并
-├── prompts/
-│   ├── note_system.md           # 笔记生成系统提示词
-│   ├── merge_system.md          # 字幕片段合并提示词
-│   ├── translate_zh_system.md   # 中文字幕翻译提示词
-│   ├── translate_system.md      # 中英双语字幕翻译提示词
-│   ├── summary_system.md        # 视频摘要生成提示词（B 站标题 + 关键词）
-│   ├── cover_image_system.md    # AI 封面生成提示词（影视飓风风格）
-│   └── proofread_system.md      # 英文字幕 ASR 错误校对提示词
+│   └── l2n/                 # 核心 Python 包（可 pip install）
+│       ├── noter.py             # LLM 调用、JSON 解析、分片合并
+│       ├── assembler.py         # JSON → Markdown 格式组装
+│       ├── transcriber.py       # YouTube Transcript API 提取
+│       ├── whisper_transcriber.py # mlx-whisper 转录 + 智能断句 + 音频下载
+│       ├── subtitle.py          # 字幕翻译 + 校对 + 摘要 + AI 封面
+│       ├── downloader.py        # 视频下载 + 完整性校验 + 音视频合并
+│       └── prompts/             # 所有 LLM 系统提示词
+│           ├── note_system.md
+│           ├── merge_system.md
+│           ├── translate_zh_system.md
+│           ├── translate_system.md
+│           ├── summary_system.md
+│           ├── cover_image_system.md
+│           └── proofread_system.md
 └── output/
     ├── transcript/              # YouTube 字幕提取结果
     ├── subtitle/{video_id}/     # 字幕输出（按视频 ID 分目录）
@@ -263,10 +275,10 @@ lecture2note/
     │   ├── subtitle_en_youtube.srt  # YouTube 原始英文字幕
     │   ├── subtitle_zh.srt      # 中文翻译字幕
     │   ├── subtitle_bilingual.srt   # 中英双语字幕
-    │   ├── summary.md             # 视频摘要
-    │   ├── cover--*.jpg          # AI 生成的封面图
-    │   └── *.mp4                  # 下载的视频文件（自动合并音频）
-    └── notes/                    # 生成的笔记
+    │   ├── summary.md           # 视频摘要
+    │   ├── cover_*.jpg          # AI 生成的封面图
+    │   └── *.mp4                # 下载的视频文件
+    └── notes/                   # 生成的笔记
         └── *.md
 ```
 
