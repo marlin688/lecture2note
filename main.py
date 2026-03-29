@@ -6,12 +6,12 @@ from pathlib import Path
 import click
 from dotenv import load_dotenv
 
-from src.noter import process_transcript
-from src.assembler import assemble_markdown
-from src.transcriber import fetch_transcript, save_transcript
-from src.subtitle import generate_subtitle, generate_summary
-from src.downloader import print_formats, download_video, _find_existing_video
-from src.transcriber import extract_video_id
+from l2n.noter import process_transcript
+from l2n.assembler import assemble_markdown
+from l2n.transcriber import fetch_transcript, save_transcript
+from l2n.subtitle import generate_subtitle, generate_summary
+from l2n.downloader import print_formats, download_video, _find_existing_video
+from l2n.transcriber import extract_video_id
 
 load_dotenv()
 
@@ -182,7 +182,7 @@ def main(input_path, youtube_url, output_path, subject, model, save_json, transc
             generate_summary(youtube_url, model)
         # 生成 AI 封面
         if cover:
-            from src.subtitle import generate_cover_images
+            from l2n.subtitle import generate_cover_images
             try:
                 generate_cover_images(youtube_url)
             except Exception as e:
@@ -209,7 +209,7 @@ def main(input_path, youtube_url, output_path, subject, model, save_json, transc
             model = "claude-sonnet-4-5-20250929"
         generate_summary(youtube_url, model)
         if cover:
-            from src.subtitle import generate_cover_images
+            from l2n.subtitle import generate_cover_images
             try:
                 generate_cover_images(youtube_url)
             except Exception as e:
@@ -220,7 +220,7 @@ def main(input_path, youtube_url, output_path, subject, model, save_json, transc
     if cover and not subtitle_lang and not summary:
         if not youtube_url:
             raise click.UsageError("--cover 需要通过 -u 指定 YouTube 视频 URL")
-        from src.subtitle import generate_cover_images
+        from l2n.subtitle import generate_cover_images
         try:
             generate_cover_images(youtube_url)
         except Exception as e:
@@ -240,7 +240,7 @@ def main(input_path, youtube_url, output_path, subject, model, save_json, transc
         audio_exts = {".mp3", ".m4a", ".wav", ".flac", ".ogg", ".webm", ".aac", ".wma"}
         if input_file.suffix.lower() in audio_exts:
             # 音频文件：先用 Whisper 转录为文本
-            from src.whisper_transcriber import transcribe_to_srt
+            from l2n.whisper_transcriber import transcribe_to_srt
             click.echo(f"🎙️ 检测到音频文件，使用 Whisper ({whisper_model}) 转录...")
             srt_text = transcribe_to_srt(str(input_file), model_name=whisper_model)
             # 从 SRT 提取纯文本作为 transcript

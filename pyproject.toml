@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "l2n-core"
+version = "0.1.0"
+description = "Lecture2Note core library: YouTube download, Whisper transcription, subtitle translation & proofreading"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.84.0",
+    "google-genai>=1.67.0",
+    "openai>=2.26.0",
+    "python-dotenv>=1.2.2",
+    "click>=8.3.1",
+    "youtube-transcript-api>=1.2.4",
+    "yt-dlp>=2026.3.17",
+    "httpx",
+]
+
+[project.optional-dependencies]
+whisper = [
+    "mlx-whisper>=0.4.3; platform_machine == 'arm64' and sys_platform == 'darwin'",
+]
+
+[project.scripts]
+lecture2note = "l2n.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+l2n = ["prompts/*.md"]
