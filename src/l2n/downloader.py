@@ -23,6 +23,7 @@ def list_formats(url: str) -> list[dict]:
         "quiet": True,
         "no_warnings": True,
         "extractor_args": {"youtube": {"js_runtimes": ["nodejs"]}},
+        "cookiesfrombrowser": ("chrome",),
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
@@ -195,6 +196,7 @@ def download_video(url: str, output_dir: str | None = None) -> str:
         "quiet": True,
         "no_warnings": True,
         "extractor_args": {"youtube": {"js_runtimes": ["nodejs"]}},
+        "cookiesfrombrowser": ("chrome",),
     }
     with yt_dlp.YoutubeDL(ydl_info_opts) as ydl:
         info = ydl.extract_info(url, download=False)
@@ -227,6 +229,7 @@ def download_video(url: str, output_dir: str | None = None) -> str:
         "quiet": False,
         "no_warnings": True,
         "extractor_args": {"youtube": {"js_runtimes": ["nodejs"]}},
+        "cookiesfrombrowser": ("chrome",),
     }
 
     # 下载视频（最多重试 MAX_RETRIES 次）

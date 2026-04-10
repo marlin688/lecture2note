@@ -164,6 +164,21 @@ def main(input_path, youtube_url, output_path, subject, model, save_json, transc
         print_formats(youtube_url)
         return
 
+    # 0.0.0 独立下载视频（不生成字幕/笔记）：先打印格式，再下载最高画质
+    if download and not subtitle_lang and not batch_file:
+        if not youtube_url:
+            raise click.UsageError("--download 需要通过 -u 指定 YouTube 视频 URL")
+        try:
+            print_formats(youtube_url)
+        except Exception as e:
+            click.echo(f"⚠️ 获取格式信息失败: {e}")
+        try:
+            video_path = download_video(youtube_url)
+            click.echo(f"🎬 视频已下载: {video_path}")
+        except Exception as e:
+            click.echo(f"❌ 视频下载失败: {e}")
+        return
+
     # 0.0.1 生成字幕（独立功能）
     if subtitle_lang:
         if not youtube_url:

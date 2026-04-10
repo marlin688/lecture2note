@@ -12,9 +12,9 @@
 #https://www.youtube.com/watch?v=kgTWKjbnrBA
 #https://www.youtube.com/watch?v=v0jYDgaVzlk
 #https://www.youtube.com/watch?v=o_60Yhb79W8
-https://www.youtube.com/watch?v=LXrqmQrscf0
-https://www.youtube.com/watch?v=LcOM-nZdqxw
-https://www.youtube.com/watch?v=lOVcPooetrM
-https://www.youtube.com/watch?v=1YuD_5UQxsA
-https://www.youtube.com/watch?v=svjjD2uthhQ
+#https://www.youtube.com/watch?v=LXrqmQrscf0
+#https://www.youtube.com/watch?v=LcOM-nZdqxw
+#https://www.youtube.com/watch?v=lOVcPooetrM
+#https://www.youtube.com/watch?v=1YuD_5UQxsA
+#https://www.youtube.com/watch?v=svjjD2uthhQ
 https://www.youtube.com/watch?v=ZDk-GsyInt8

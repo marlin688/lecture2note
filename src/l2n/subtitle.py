@@ -618,6 +618,7 @@ def _get_video_info(url: str) -> dict:
         ydl_opts = {
             "quiet": True, "no_warnings": True,
             "extractor_args": {"youtube": {"js_runtimes": ["nodejs"]}},
+            "cookiesfrombrowser": ("chrome",),
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)

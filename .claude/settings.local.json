@@ -93,7 +93,9 @@
       "Bash(grep -v '^\\\\s*$')",
       "Bash(cp:*)",
       "Bash(mkdir -p /Users/marlin/学习/agent-dev-project/lecture2note/.claude/commands)",
-      "Bash(mv ~/.claude/commands/subtitle-translate.md ~/.claude/commands/subtitle-proofread.md ~/.claude/commands/note-generate.md /Users/marlin/学习/agent-dev-project/lecture2note/.claude/commands/)"
+      "Bash(mv ~/.claude/commands/subtitle-translate.md ~/.claude/commands/subtitle-proofread.md ~/.claude/commands/note-generate.md /Users/marlin/学习/agent-dev-project/lecture2note/.claude/commands/)",
+      "Bash(git tag:*)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(k,''''='''',v\\) for k,v in d.items\\(\\) if ''''key'''' not in k.lower\\(\\) and ''''secret'''' not in k.lower\\(\\)]\")"
     ]
   }
 }

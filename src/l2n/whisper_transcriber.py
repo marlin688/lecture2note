@@ -381,6 +381,7 @@ def download_audio(url: str, output_dir: Path) -> Path:
         "quiet": True,
         "no_warnings": True,
         "extractor_args": {"youtube": {"js_runtimes": ["nodejs"]}},
+        "cookiesfrombrowser": ("chrome",),
     }
     with yt_dlp.YoutubeDL(ydl_info_opts) as ydl:
         info = ydl.extract_info(url, download=False)
@@ -421,6 +422,7 @@ def download_audio(url: str, output_dir: Path) -> Path:
         "quiet": True,
         "no_warnings": True,
         "extractor_args": {"youtube": {"js_runtimes": ["nodejs"]}},
+        "cookiesfrombrowser": ("chrome",),
     }
 
     # 下载音频（最多重试 3 次）
