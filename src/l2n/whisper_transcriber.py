@@ -380,7 +380,8 @@ def download_audio(url: str, output_dir: Path) -> Path:
     ydl_info_opts = {
         "quiet": True,
         "no_warnings": True,
-        "extractor_args": {"youtube": {"js_runtimes": ["nodejs"]}},
+        "format": "bestaudio/best",
+        "js_runtimes": {"node": {}},
         "cookiesfrombrowser": ("chrome",),
     }
     with yt_dlp.YoutubeDL(ydl_info_opts) as ydl:
@@ -421,7 +422,7 @@ def download_audio(url: str, output_dir: Path) -> Path:
         "outtmpl": output_template,
         "quiet": True,
         "no_warnings": True,
-        "extractor_args": {"youtube": {"js_runtimes": ["nodejs"]}},
+        "js_runtimes": {"node": {}},
         "cookiesfrombrowser": ("chrome",),
     }
 

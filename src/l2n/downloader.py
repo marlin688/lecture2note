@@ -22,7 +22,7 @@ def list_formats(url: str) -> list[dict]:
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
-        "extractor_args": {"youtube": {"js_runtimes": ["nodejs"]}},
+        "js_runtimes": {"node": {}},
         "cookiesfrombrowser": ("chrome",),
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -195,7 +195,7 @@ def download_video(url: str, output_dir: str | None = None) -> str:
     ydl_info_opts = {
         "quiet": True,
         "no_warnings": True,
-        "extractor_args": {"youtube": {"js_runtimes": ["nodejs"]}},
+        "js_runtimes": {"node": {}},
         "cookiesfrombrowser": ("chrome",),
     }
     with yt_dlp.YoutubeDL(ydl_info_opts) as ydl:
@@ -228,7 +228,7 @@ def download_video(url: str, output_dir: str | None = None) -> str:
         "outtmpl": f"{output_dir}/%(title)s.%(ext)s",
         "quiet": False,
         "no_warnings": True,
-        "extractor_args": {"youtube": {"js_runtimes": ["nodejs"]}},
+        "js_runtimes": {"node": {}},
         "cookiesfrombrowser": ("chrome",),
     }
 
