@@ -15,8 +15,23 @@ from openai import OpenAI
 
 
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
-DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
 MAX_CHUNK_CHARS = 8_000
+
+
+def resolve_model(model: str | None = None) -> str:
+    """解析最终使用的模型名。优先级：显式参数 > ANTHROPIC_MODEL > GEMINI_MODEL > GPT_MODEL。"""
+    if model:
+        return model
+    resolved = (
+        os.environ.get("ANTHROPIC_MODEL")
+        or os.environ.get("GEMINI_MODEL")
+        or os.environ.get("GPT_MODEL")
+    )
+    if not resolved:
+        raise click.ClickException(
+            "未配置模型：请在 .env 中设置 ANTHROPIC_MODEL / GEMINI_MODEL / GPT_MODEL 之一，或用 -m 参数指定"
+        )
+    return resolved
 
 
 def load_system_prompt() -> str:
@@ -160,8 +175,9 @@ def _call_non_stream(client, model, system_prompt, messages, max_tokens=16000):
         return "", "error"
 
 
-def call_claude(transcript: str, subject: str, model: str = DEFAULT_MODEL) -> str:
+def call_claude(transcript: str, subject: str, model: str | None = None) -> str:
     """调用 Anthropic API 生成笔记，支持重试和截断自动续写。"""
+    model = resolve_model(model)
     base_url = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
@@ -390,8 +406,9 @@ def call_gpt(transcript: str, subject: str, model: str) -> str:
     return full_text
 
 
-def call_llm(transcript: str, subject: str, model: str = DEFAULT_MODEL) -> str:
+def call_llm(transcript: str, subject: str, model: str | None = None) -> str:
     """根据模型名称自动选择 Claude、Gemini 或 GPT API。"""
+    model = resolve_model(model)
     if _is_gemini_model(model):
         return call_gemini(transcript, subject, model)
     if _is_gpt_model(model):
@@ -708,9 +725,10 @@ _MIN_SECTIONS_PER_1K = 0.5
 
 
 def process_transcript(
-    transcript: str, subject: str, model: str = DEFAULT_MODEL
+    transcript: str, subject: str, model: str | None = None
 ) -> dict:
     """处理转写文本：短文本直接调用，长文本分片后合并。"""
+    model = resolve_model(model)
     chunks = split_transcript(transcript)
 
     if len(chunks) == 1:

@@ -126,13 +126,13 @@ def run_subtitle_pipeline(url: str, model: str, lang: str = "zh", whisper_model:
 
 
 @mcp.tool()
-def generate_notes(transcript: str, subject: str = "", model: str = "claude-sonnet-4-5-20250929") -> str:
+def generate_notes(transcript: str, subject: str = "", model: str | None = None) -> str:
     """Generate structured lecture notes from a transcript.
 
     Args:
         transcript: Lecture transcript text
         subject: Subject/course name (optional, auto-detected if empty)
-        model: LLM model name
+        model: LLM model name. If omitted, reads ANTHROPIC_MODEL / GEMINI_MODEL / GPT_MODEL from env.
 
     Returns:
         Markdown formatted lecture notes

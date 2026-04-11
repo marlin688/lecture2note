@@ -756,7 +756,9 @@ def generate_cover_images(
 
     # 图片生成使用独立配置（GEMINI_IMAGE_*），与文本翻译的 GEMINI_* 分开
     if model is None:
-        model = os.environ.get("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image-preview")
+        model = os.environ.get("GEMINI_IMAGE_MODEL")
+        if not model:
+            raise click.ClickException("未配置封面模型：请在 .env 中设置 GEMINI_IMAGE_MODEL")
 
     # 设置 Gemini 客户端（优先使用图片专用配置，回退到通用 Gemini 配置）
     api_key = os.environ.get("GEMINI_IMAGE_API_KEY") or os.environ.get("GEMINI_API_KEY", "")

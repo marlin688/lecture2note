@@ -6,7 +6,7 @@ from pathlib import Path
 import click
 from dotenv import load_dotenv
 
-from l2n.noter import process_transcript
+from l2n.noter import process_transcript, resolve_model
 from l2n.assembler import assemble_markdown
 from l2n.transcriber import fetch_transcript, save_transcript
 from l2n.subtitle import generate_subtitle, generate_summary
@@ -85,8 +85,7 @@ def main(input_path, youtube_url, output_path, subject, model, save_json, transc
 
         if subtitle_lang is None:
             subtitle_lang = "zh"
-        if model is None:
-            model = "claude-sonnet-4-5-20250929"
+        model = resolve_model(model)
 
         click.echo(f"📋 批量模式：共 {len(urls)} 个视频")
         click.echo(f"   字幕语言: {subtitle_lang} | 模型: {model}")
@@ -183,8 +182,7 @@ def main(input_path, youtube_url, output_path, subject, model, save_json, transc
     if subtitle_lang:
         if not youtube_url:
             raise click.UsageError("--subtitle 需要通过 -u 指定 YouTube 视频 URL")
-        if model is None:
-            model = "claude-sonnet-4-5-20250929"
+        model = resolve_model(model)
         srt_path = generate_subtitle(
             youtube_url, model,
             target_lang=subtitle_lang,
@@ -220,8 +218,7 @@ def main(input_path, youtube_url, output_path, subject, model, save_json, transc
     if summary and not subtitle_lang:
         if not youtube_url:
             raise click.UsageError("--summary 需要通过 -u 指定 YouTube 视频 URL")
-        if model is None:
-            model = "claude-sonnet-4-5-20250929"
+        model = resolve_model(model)
         generate_summary(youtube_url, model)
         if cover:
             from l2n.subtitle import generate_cover_images
@@ -278,9 +275,8 @@ def main(input_path, youtube_url, output_path, subject, model, save_json, transc
         else:
             transcript = input_file.read_text(encoding="utf-8")
 
-    # 0.2 确定模型：优先命令行参数 > 环境变量 > 硬编码默认
-    if model is None:
-        model = os.environ.get("ANTHROPIC_MODEL") or os.environ.get("GEMINI_MODEL") or os.environ.get("GPT_MODEL") or "claude-sonnet-4-5-20250929"
+    # 0.2 确定模型：优先命令行参数 > 环境变量，未配置则报错
+    model = resolve_model(model)
 
     # 1. 读取输入统计
     char_count = len(transcript)
