@@ -16,6 +16,7 @@ dependencies = [
     "youtube-transcript-api>=1.2.4",
     "yt-dlp>=2026.3.17",
     "httpx",
+    "pydantic>=2.0",
 ]
 
 [project.optional-dependencies]

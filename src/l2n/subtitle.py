@@ -383,10 +383,13 @@ def _translate_one_chunk(args: tuple) -> tuple[int, dict[int, str]]:
     发送格式：每行带序号前缀 "[N] 英文文本"
     期望返回：每行带序号前缀 "[N] 中文翻译"
     按序号匹配，而非位置匹配，确保即使 LLM 漏行/乱序也能精确对齐。
+
+    args[-1] 是 llm_call(system_prompt, user_message) -> str 的可调用对象，
+    由 translate_srt 根据 TRANSLATE_BACKEND 选择注入（legacy 或 auth.json 后端）。
     """
-    chunk_idx, numbered_lines, global_indices, system_prompt, model = args
+    chunk_idx, numbered_lines, global_indices, system_prompt, llm_call = args
     user_message = "\n".join(numbered_lines)
-    raw = _call_translate_llm(system_prompt, user_message, model)
+    raw = llm_call(system_prompt, user_message)
 
     # 清理可能的 ``` 包裹
     text = raw.strip()
@@ -435,7 +438,25 @@ def translate_srt(en_srt: str, model: str, mode: str = "bilingual") -> str:
     2. LLM 返回带序号的翻译，按序号精确匹配（非位置匹配）
     3. 将翻译文本注入回原始时间戳模板
     LLM 全程不接触时间戳，按序号对齐，双重保障杜绝错位。
+
+    后端切换：
+    - TRANSLATE_BACKEND=auth_json 时，仅翻译走 l2n.llm_oauth（ChatGPT OAuth / Codex Responses）
+    - 其它（默认 legacy）走 _call_translate_llm（传统 API key + env）
+    合并 / 校对 / 摘要 不受此开关影响。
     """
+    backend = os.environ.get("TRANSLATE_BACKEND", "legacy").strip().lower()
+    if backend == "auth_json":
+        from l2n.llm_oauth import call_translate_via_oauth
+        translate_model = (os.environ.get("TRANSLATE_MODEL_AUTH_JSON", "").strip()
+                           or model)
+        click.echo(f"   🔐 翻译后端: auth.json (模型: {translate_model})")
+
+        def llm_call(sys_prompt: str, usr_msg: str) -> str:
+            return call_translate_via_oauth(sys_prompt, usr_msg, translate_model)
+    else:
+        def llm_call(sys_prompt: str, usr_msg: str) -> str:
+            return _call_translate_llm(sys_prompt, usr_msg, model)
+
     system_prompt = _load_translate_prompt(mode)
     entries = _parse_srt_entries(en_srt)
     batches = _split_text_batches(entries)
@@ -453,7 +474,7 @@ def translate_srt(en_srt: str, model: str, mode: str = "bilingual") -> str:
             global_idx = global_offset + j + 1  # 1-based 全局序号
             numbered_lines.append(f"[{global_idx}] {text}")
             global_indices.append(global_idx)
-        batch_args.append((i, numbered_lines, global_indices, system_prompt, model))
+        batch_args.append((i, numbered_lines, global_indices, system_prompt, llm_call))
         global_offset += len(batch)
 
     results = [None] * total_chunks
@@ -489,7 +510,7 @@ def translate_srt(en_srt: str, model: str, mode: str = "bilingual") -> str:
         numbered_lines = [f"[{idx}] {entries[idx - 1][2]}" for idx in retranslate_indices]
         retry_prompt = "\n".join(numbered_lines)
 
-        raw = _call_translate_llm(system_prompt, retry_prompt, model)
+        raw = llm_call(system_prompt, retry_prompt)
         for line in raw.strip().split("\n"):
             line = line.strip()
             if not line:
