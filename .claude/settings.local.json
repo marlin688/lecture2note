@@ -97,7 +97,9 @@
       "Bash(git tag:*)",
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(k,''''='''',v\\) for k,v in d.items\\(\\) if ''''key'''' not in k.lower\\(\\) and ''''secret'''' not in k.lower\\(\\)]\")",
       "Bash(grep -v \"^$\")",
-      "Bash(git remote:*)"
+      "Bash(git remote:*)",
+      "Bash(cp /Users/marlin/学习/agent-dev-project/video2gen/auth.json /Users/marlin/学习/agent-dev-project/lecture2note/auth.json)",
+      "Bash(chmod 600 /Users/marlin/学习/agent-dev-project/lecture2note/auth.json)"
     ]
   }
 }
