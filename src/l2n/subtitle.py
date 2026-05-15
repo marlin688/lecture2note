@@ -144,9 +144,12 @@ def _parse_groups(raw: str, batch_start: int, batch_size: int) -> list[tuple[int
 
 
 def _merge_one_chunk(args: tuple) -> tuple[int, str]:
-    """对一批碎片发送分组请求，返回 (chunk_idx, raw_response)。"""
-    chunk_idx, user_message, system_prompt, model = args
-    raw = _call_translate_llm(system_prompt, user_message, model)
+    """对一批碎片发送分组请求，返回 (chunk_idx, raw_response)。
+
+    args[-1] 是 llm_call(system_prompt, user_message) -> str。
+    """
+    chunk_idx, user_message, system_prompt, llm_call = args
+    raw = llm_call(system_prompt, user_message)
     return chunk_idx, raw
 
 
@@ -154,10 +157,13 @@ def merge_subtitle_fragments(snippets, model: str) -> list[MergedEntry]:
     """用 LLM 判断句子边界，将碎片合并为完整句子。
 
     LLM 只输出分组编号，时间戳由代码从原始数据计算，保证 100% 准确。
+
+    后端切换：TRANSLATE_BACKEND=auth_json 时走 l2n.llm_oauth；否则走 _call_translate_llm。
     """
     if not snippets:
         return []
 
+    llm_call = _resolve_llm_call(model, "合并")
     system_prompt = _load_merge_prompt()
     total = len(snippets)
 
@@ -172,7 +178,7 @@ def merge_subtitle_fragments(snippets, model: str) -> list[MergedEntry]:
         for i in range(batch_start, batch_end):
             lines.append(f"{i + 1}|{snippets[i].text}")
         user_message = "\n".join(lines)
-        batch_args.append((chunk_idx, user_message, system_prompt, model))
+        batch_args.append((chunk_idx, user_message, system_prompt, llm_call))
 
     total_batches = len(batch_args)
     click.echo(f"   🔄 分组中 ({total_batches} 批, {MAX_CONCURRENT} 路并发)...")
@@ -277,6 +283,28 @@ def _load_translate_prompt(mode: str = "bilingual") -> str:
     else:
         prompt_path = PROMPTS_DIR / "translate_system.md"
     return prompt_path.read_text(encoding="utf-8")
+
+
+def _resolve_llm_call(model: str, label: str):
+    """根据 TRANSLATE_BACKEND env 返回 llm_call(system_prompt, user_message) -> str。
+
+    label: click.echo 提示词（"翻译" / "校对" / "合并" / "摘要"），仅 auth_json 时打印。
+    auth_json 模式下可用 TRANSLATE_MODEL_AUTH_JSON 覆盖模型名；否则透传 caller 传入的 model。
+    """
+    backend = os.environ.get("TRANSLATE_BACKEND", "legacy").strip().lower()
+    if backend == "auth_json":
+        from l2n.llm_oauth import call_translate_via_oauth
+        effective_model = (os.environ.get("TRANSLATE_MODEL_AUTH_JSON", "").strip()
+                           or model)
+        click.echo(f"   🔐 {label}后端: auth.json (模型: {effective_model})")
+
+        def _call(sys_p: str, usr_m: str) -> str:
+            return call_translate_via_oauth(sys_p, usr_m, effective_model)
+        return _call
+
+    def _call(sys_p: str, usr_m: str) -> str:
+        return _call_translate_llm(sys_p, usr_m, model)
+    return _call
 
 
 def _call_translate_llm(system_prompt: str, user_message: str, model: str) -> str:
@@ -439,24 +467,9 @@ def translate_srt(en_srt: str, model: str, mode: str = "bilingual") -> str:
     3. 将翻译文本注入回原始时间戳模板
     LLM 全程不接触时间戳，按序号对齐，双重保障杜绝错位。
 
-    后端切换：
-    - TRANSLATE_BACKEND=auth_json 时，仅翻译走 l2n.llm_oauth（ChatGPT OAuth / Codex Responses）
-    - 其它（默认 legacy）走 _call_translate_llm（传统 API key + env）
-    合并 / 校对 / 摘要 不受此开关影响。
+    后端切换：TRANSLATE_BACKEND=auth_json 时走 l2n.llm_oauth；否则走 _call_translate_llm。
     """
-    backend = os.environ.get("TRANSLATE_BACKEND", "legacy").strip().lower()
-    if backend == "auth_json":
-        from l2n.llm_oauth import call_translate_via_oauth
-        translate_model = (os.environ.get("TRANSLATE_MODEL_AUTH_JSON", "").strip()
-                           or model)
-        click.echo(f"   🔐 翻译后端: auth.json (模型: {translate_model})")
-
-        def llm_call(sys_prompt: str, usr_msg: str) -> str:
-            return call_translate_via_oauth(sys_prompt, usr_msg, translate_model)
-    else:
-        def llm_call(sys_prompt: str, usr_msg: str) -> str:
-            return _call_translate_llm(sys_prompt, usr_msg, model)
-
+    llm_call = _resolve_llm_call(model, "翻译")
     system_prompt = _load_translate_prompt(mode)
     entries = _parse_srt_entries(en_srt)
     batches = _split_text_batches(entries)
@@ -560,18 +573,7 @@ def proofread_en_srt(en_srt: str, zh_srt: str, model: str) -> str:
         click.echo("   ⚠️ 中英条目数不一致，跳过校对")
         return en_srt
 
-    backend = os.environ.get("TRANSLATE_BACKEND", "legacy").strip().lower()
-    if backend == "auth_json":
-        from l2n.llm_oauth import call_translate_via_oauth
-        proofread_model = (os.environ.get("TRANSLATE_MODEL_AUTH_JSON", "").strip()
-                           or model)
-        click.echo(f"   🔐 校对后端: auth.json (模型: {proofread_model})")
-
-        def llm_call(sys_prompt: str, usr_msg: str) -> str:
-            return call_translate_via_oauth(sys_prompt, usr_msg, proofread_model)
-    else:
-        def llm_call(sys_prompt: str, usr_msg: str) -> str:
-            return _call_translate_llm(sys_prompt, usr_msg, model)
+    llm_call = _resolve_llm_call(model, "校对")
 
     # 分批：每批 100 条，4 路并发
     BATCH_SIZE = 100
@@ -725,7 +727,8 @@ def generate_summary(
         f"--- 字幕内容 ---\n{plain_text}"
     )
 
-    raw = _call_translate_llm(system_prompt, user_message, model)
+    llm_call = _resolve_llm_call(model, "摘要")
+    raw = llm_call(system_prompt, user_message)
 
     # 清理可能的 ```markdown 包裹
     text = raw.strip()
