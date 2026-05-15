@@ -547,6 +547,9 @@ def proofread_en_srt(en_srt: str, zh_srt: str, model: str) -> str:
 
     策略：将英文+中文逐行配对发给 LLM，LLM 只返回需要修正的行。
     分批处理以控制单次请求大小。
+
+    后端切换与 translate_srt 同：TRANSLATE_BACKEND=auth_json 时走 ChatGPT OAuth；
+    否则走 _call_translate_llm（legacy）。
     """
     system_prompt = (PROMPTS_DIR / "proofread_system.md").read_text(encoding="utf-8")
 
@@ -556,6 +559,19 @@ def proofread_en_srt(en_srt: str, zh_srt: str, model: str) -> str:
     if len(en_entries) != len(zh_entries):
         click.echo("   ⚠️ 中英条目数不一致，跳过校对")
         return en_srt
+
+    backend = os.environ.get("TRANSLATE_BACKEND", "legacy").strip().lower()
+    if backend == "auth_json":
+        from l2n.llm_oauth import call_translate_via_oauth
+        proofread_model = (os.environ.get("TRANSLATE_MODEL_AUTH_JSON", "").strip()
+                           or model)
+        click.echo(f"   🔐 校对后端: auth.json (模型: {proofread_model})")
+
+        def llm_call(sys_prompt: str, usr_msg: str) -> str:
+            return call_translate_via_oauth(sys_prompt, usr_msg, proofread_model)
+    else:
+        def llm_call(sys_prompt: str, usr_msg: str) -> str:
+            return _call_translate_llm(sys_prompt, usr_msg, model)
 
     # 分批：每批 100 条，4 路并发
     BATCH_SIZE = 100
@@ -573,13 +589,13 @@ def proofread_en_srt(en_srt: str, zh_srt: str, model: str) -> str:
             en_text = en_entries[i][2]
             zh_text = zh_entries[i][2]
             numbered_lines.append(f"[{seq}] {en_text} ||| {zh_text}")
-        batch_args.append((batch_idx, "\n".join(numbered_lines), system_prompt, model))
+        batch_args.append((batch_idx, "\n".join(numbered_lines)))
 
     click.echo(f"   📦 共 {total_batches} 批，{MAX_CONCURRENT} 路并发校对...")
 
     def _proofread_one(args):
-        batch_idx, user_message, sys_prompt, mdl = args
-        raw = _call_translate_llm(sys_prompt, user_message, mdl)
+        batch_idx, user_message = args
+        raw = llm_call(system_prompt, user_message)
         corrections = {}
         for line in raw.strip().split("\n"):
             line = line.strip()
