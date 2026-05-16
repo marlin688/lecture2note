@@ -654,12 +654,8 @@ def _get_video_info(url: str) -> dict:
     """获取视频标题和时长等元信息。"""
     try:
         import yt_dlp
-        ydl_opts = {
-            "quiet": True, "no_warnings": True,
-            "js_runtimes": {"node": {}},
-            "cookiesfrombrowser": ("chrome",),
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        from l2n.ytdlp_opts import info_opts
+        with yt_dlp.YoutubeDL(info_opts()) as ydl:
             info = ydl.extract_info(url, download=False)
         duration = info.get("duration", 0)
         m, s = divmod(duration, 60)

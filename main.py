@@ -89,15 +89,26 @@ def main(input_path, youtube_url, output_path, subject, model, save_json, transc
 
         click.echo(f"📋 批量模式：共 {len(urls)} 个视频")
         click.echo(f"   字幕语言: {subtitle_lang} | 模型: {model}")
-        click.echo(f"   摘要: {'是' if summary else '否'} | 下载视频: 是 (bestvideo)\n")
+        click.echo(
+            f"   摘要: {'是' if summary else '否'} | "
+            f"下载视频: {'是 (bestvideo)' if download else '否'} | "
+            f"封面: {'是' if cover else '否'}\n"
+        )
 
-        succeeded, skipped, failed = [], [], []
+        # 分步计数：每个步骤独立统计 成功/跳过/失败
+        stats = {
+            "subtitle": {"ok": 0, "skip": 0, "fail": 0},
+            "summary":  {"ok": 0, "skip": 0, "fail": 0},
+            "video":    {"ok": 0, "skip": 0, "fail": 0},
+            "cover":    {"ok": 0, "skip": 0, "fail": 0},
+        }
+        failures: list[tuple[str, str, str]] = []  # (url, step, err)
+
         for idx, url in enumerate(urls, 1):
             click.echo(f"\n{'='*60}")
             click.echo(f"[{idx}/{len(urls)}] {url}")
             click.echo(f"{'='*60}")
 
-            # 断点续传：检查已完成的步骤
             video_id = extract_video_id(url)
             video_dir = Path("output/subtitle") / video_id
 
@@ -106,17 +117,14 @@ def main(input_path, youtube_url, output_path, subject, model, save_json, transc
             has_summary = (video_dir / "summary.md").exists()
             existing_video = _find_existing_video(video_dir)
             has_video = existing_video is not None and not str(existing_video).endswith(".part")
+            has_cover = (video_dir / "cover_1.png").exists() if cover else True
 
-            if has_subtitle and (has_summary or not summary) and has_video:
-                click.echo(f"⏭️  全部已完成，跳过")
-                skipped.append(url)
-                continue
-
-            try:
-                # 1) 生成字幕
-                if has_subtitle:
-                    click.echo(f"⏭️  字幕已存在，跳过")
-                else:
+            # 1) 字幕
+            if has_subtitle:
+                click.echo("⏭️  字幕已存在，跳过")
+                stats["subtitle"]["skip"] += 1
+            else:
+                try:
                     srt_path = generate_subtitle(
                         url, model,
                         target_lang=subtitle_lang,
@@ -124,32 +132,65 @@ def main(input_path, youtube_url, output_path, subject, model, save_json, transc
                         whisper_model=whisper_model,
                     )
                     click.echo(f"✅ 字幕: {srt_path}")
+                    stats["subtitle"]["ok"] += 1
+                except Exception as e:
+                    click.echo(f"❌ 字幕失败: {e}")
+                    stats["subtitle"]["fail"] += 1
+                    failures.append((url, "subtitle", str(e)))
 
-                # 2) 生成摘要（如果指定）
-                if summary:
-                    if has_summary:
-                        click.echo(f"⏭️  摘要已存在，跳过")
-                    else:
-                        generate_summary(url, model)
-
-                # 3) 下载最高画质视频
-                if has_video:
-                    click.echo(f"⏭️  视频已存在，跳过")
+            # 2) 摘要
+            if summary:
+                if has_summary:
+                    click.echo("⏭️  摘要已存在，跳过")
+                    stats["summary"]["skip"] += 1
                 else:
-                    download_video(url)
+                    try:
+                        generate_summary(url, model)
+                        stats["summary"]["ok"] += 1
+                    except Exception as e:
+                        click.echo(f"❌ 摘要失败: {e}")
+                        stats["summary"]["fail"] += 1
+                        failures.append((url, "summary", str(e)))
 
-                succeeded.append(url)
-            except Exception as e:
-                click.echo(f"❌ 失败: {e}")
-                failed.append((url, str(e)))
+            # 3) 下载视频（仅在显式 --download 时）
+            if download:
+                if has_video:
+                    click.echo("⏭️  视频已存在，跳过")
+                    stats["video"]["skip"] += 1
+                else:
+                    try:
+                        download_video(url)
+                        stats["video"]["ok"] += 1
+                    except Exception as e:
+                        click.echo(f"❌ 视频下载失败: {e}")
+                        stats["video"]["fail"] += 1
+                        failures.append((url, "video", str(e)))
+
+            # 4) 封面
+            if cover:
+                if has_cover:
+                    click.echo("⏭️  封面已存在，跳过")
+                    stats["cover"]["skip"] += 1
+                else:
+                    try:
+                        from l2n.subtitle import generate_cover_images
+                        generate_cover_images(url)
+                        stats["cover"]["ok"] += 1
+                    except Exception as e:
+                        click.echo(f"❌ 封面失败: {e}")
+                        stats["cover"]["fail"] += 1
+                        failures.append((url, "cover", str(e)))
 
         # 汇总
         click.echo(f"\n{'='*60}")
-        click.echo(f"📊 批量处理完成: {len(succeeded)} 成功, {len(skipped)} 跳过, {len(failed)} 失败")
-        if failed:
-            click.echo("失败列表:")
-            for url, err in failed:
-                click.echo(f"  ✗ {url} — {err}")
+        click.echo("📊 批量处理完成")
+        for step, s in stats.items():
+            if s["ok"] or s["skip"] or s["fail"]:
+                click.echo(f"   {step:8s}: {s['ok']} 成功, {s['skip']} 跳过, {s['fail']} 失败")
+        if failures:
+            click.echo("\n失败明细:")
+            for url, step, err in failures:
+                click.echo(f"  ✗ [{step}] {url} — {err}")
         return
 
     # 0. 参数校验

@@ -7,6 +7,7 @@ import click
 import yt_dlp
 
 from l2n.transcriber import extract_video_id
+from l2n.ytdlp_opts import info_opts, download_opts
 
 # 视频文件扩展名
 _VIDEO_EXTS = (".mp4", ".webm", ".mkv")
@@ -19,13 +20,7 @@ def list_formats(url: str) -> list[dict]:
     Returns:
         格式列表，每项包含 format_id, ext, resolution, filesize, url 等
     """
-    ydl_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "js_runtimes": {"node": {}},
-        "cookiesfrombrowser": ("chrome",),
-    }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+    with yt_dlp.YoutubeDL(info_opts()) as ydl:
         info = ydl.extract_info(url, download=False)
 
     formats = []
@@ -192,20 +187,14 @@ def download_video(url: str, output_dir: str | None = None) -> str:
     video_dir.mkdir(parents=True, exist_ok=True)
 
     # 先获取视频信息（用于时长和文件大小校验）
-    ydl_info_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "js_runtimes": {"node": {}},
-        "cookiesfrombrowser": ("chrome",),
-    }
-    with yt_dlp.YoutubeDL(ydl_info_opts) as ydl:
+    with yt_dlp.YoutubeDL(info_opts()) as ydl:
         info = ydl.extract_info(url, download=False)
     expected_duration = info.get("duration", 0)
 
     # 估算预期文件大小：让 yt-dlp 解析 bestvideo 实际选中的格式
     expected_filesize = 0
     try:
-        with yt_dlp.YoutubeDL({**ydl_info_opts, "format": "bestvideo"}) as ydl_fs:
+        with yt_dlp.YoutubeDL({**info_opts(), "format": "bestvideo"}) as ydl_fs:
             sel_info = ydl_fs.extract_info(url, download=False)
             expected_filesize = sel_info.get("filesize") or sel_info.get("filesize_approx") or 0
     except Exception:
@@ -222,15 +211,10 @@ def download_video(url: str, output_dir: str | None = None) -> str:
             click.echo(f"   ⚠️ 已有视频文件不完整，重新下载...")
             existing.unlink()
 
-    fmt = "bestvideo"
-    ydl_opts = {
-        "format": fmt,
-        "outtmpl": f"{output_dir}/%(title)s.%(ext)s",
-        "quiet": False,
-        "no_warnings": True,
-        "js_runtimes": {"node": {}},
-        "cookiesfrombrowser": ("chrome",),
-    }
+    ydl_opts = download_opts(
+        format="bestvideo",
+        outtmpl=f"{output_dir}/%(title)s.%(ext)s",
+    )
 
     # 下载视频（最多重试 MAX_RETRIES 次）
     for attempt in range(1, MAX_RETRIES + 1):

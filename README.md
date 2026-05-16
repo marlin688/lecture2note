@@ -31,10 +31,11 @@
 
 ### 批量模式（`--batch`）
 
-- **一键批量** — 从 URL 列表文件批量处理：字幕翻译 + 摘要生成 + 视频下载
-- **断点续传** — 中断后重新运行自动跳过已完成的步骤，每个步骤（字幕/摘要/视频）独立检查
-- **分辨率控制** — `--max-res` 限制下载视频的最大分辨率（720p/1080p/2k/4k），默认 1080p
-- **容错处理** — 单个视频失败不中断整个批次，最后汇总成功/失败列表
+- **按需组合** — 通过 `--subtitle / --summary / --download / --cover` 自由叠加四个步骤，未指定的步骤不会执行（例如不加 `--download` 就不会占用 GB 级磁盘）
+- **断点续传** — 中断后重新运行自动跳过已完成的步骤，每个步骤（字幕/摘要/视频/封面）独立检查
+- **分步统计** — 汇总按 `subtitle / summary / video / cover` 四列分别展示「成功 / 跳过 / 失败」，失败明细带步骤标签
+- **容错处理** — 单个步骤失败不中断同一视频的后续步骤，也不影响其他视频继续处理
+- **静默进度** — 后台运行（nohup / 重定向）时自动关闭 yt-dlp 百分比刷新，日志体积可控
 
 ### 笔记模式（`-i` / `-u`）
 
@@ -160,21 +161,27 @@ https://www.youtube.com/watch?v=VIDEO_ID_2
 https://www.youtube.com/watch?v=VIDEO_ID_3
 EOF
 
-# 批量处理：字幕 + 视频下载（默认 1080p）
+# 从 YouTube 合集自动提取所有视频 URL
+yt-dlp --flat-playlist --print "https://www.youtube.com/watch?v=%(id)s" \
+  "https://www.youtube.com/playlist?list=PLAYLIST_ID" > urls.txt
+
+# 批量处理：仅生成中文字幕（默认）
 python main.py --batch urls.txt
 
-# 批量处理：字幕 + 摘要 + 视频下载
-python main.py --batch urls.txt --summary
+# 批量处理：字幕 + 下载最高画质视频（bestvideo + 自动合并音频）
+python main.py --batch urls.txt --download
 
-# 限制最高 720p，省流量
-python main.py --batch urls.txt --summary --max-res 720p
+# 字幕 + 摘要 + 视频 + 封面（一把梭）
+python main.py --batch urls.txt --summary --download --cover
 
-# 指定 2k 分辨率 + 双语字幕
-python main.py --batch urls.txt --subtitle bilingual --max-res 2k
+# 双语字幕 + 视频
+python main.py --batch urls.txt --subtitle bilingual --download
 
-# 中断后重新运行，自动跳过已完成的视频
-python main.py --batch urls.txt --summary
+# 中断后重新运行，自动跳过已完成的步骤
+python main.py --batch urls.txt --summary --download
 ```
+
+**注意**：`--download` 在批量模式下需显式指定才会下载视频；不指定时只跑字幕（及其他显式开启的步骤），节省磁盘和带宽。
 
 #### 平台切换
 
@@ -203,6 +210,13 @@ ITSSX_BASE_URL=https://crs.itssx.com/api
 ITSSX_MODEL=claude-sonnet-4-5-20250929
 ```
 
+可选：通过 `YTDLP_BROWSER` 切换 yt-dlp 读取 cookies 的浏览器（默认 `chrome`），用于绕过 YouTube 年龄/地区限制：
+
+```env
+# 可选值: chrome / firefox / safari / edge / brave / opera
+YTDLP_BROWSER=firefox
+```
+
 #### 其他
 
 ```bash
@@ -225,9 +239,8 @@ python main.py -u "https://www.youtube.com/watch?v=VIDEO_ID" --list-formats
 | `--whisper-model` | Whisper 模型（`tiny`/`base`/`small`/`medium`/`large`） | `medium` |
 | `--no-whisper` | 不使用 Whisper，回退到 YouTube 字幕 | `false` |
 | `--summary` | 生成视频摘要 Markdown | `false` |
-| `--download` | 字幕生成后自动下载最高画质视频 | `false` |
+| `--download` | 下载最高画质视频（bestvideo + 自动合并音频）。批量模式下必须显式指定才会下载 | `false` |
 | `--batch` | 批量处理：指定包含多个 YouTube URL 的文本文件 | — |
-| `--max-res` | 下载视频的最大分辨率（`720p`/`1080p`/`2k`/`4k`） | `1080p` |
 | `--platform` | API 中转平台（`tuzi` / `itssx`），覆盖 `.env` 中的 `API_PLATFORM` | `.env` 配置 |
 | `--cover` | 生成 AI 封面图（3 张 B 站风格，需要 Gemini） | `false` |
 | `--list-formats` | 列出视频可用的下载格式和地址 | `false` |
@@ -258,6 +271,7 @@ lecture2note/
 │       ├── whisper_transcriber.py # mlx-whisper 转录 + 智能断句 + 音频下载
 │       ├── subtitle.py          # 字幕翻译 + 校对 + 摘要 + AI 封面
 │       ├── downloader.py        # 视频下载 + 完整性校验 + 音视频合并
+│       ├── ytdlp_opts.py        # yt-dlp 配置工厂（统一 cookies / 进度静默 / JS runtime）
 │       └── prompts/             # 所有 LLM 系统提示词
 │           ├── note_system.md
 │           ├── merge_system.md
@@ -316,14 +330,17 @@ YouTube URL
 ```
 URL 列表文件 (urls.txt)
     │
-    ├─► 逐个视频处理，每个执行：
-    │   ├─► 字幕转录 + 翻译
-    │   ├─► 摘要生成 (--summary)
-    │   └─► 视频下载 (受 --max-res 限制)
+    ├─► 逐个视频处理，按显式开关组合：
+    │   ├─► 字幕转录 + 翻译  (--subtitle，默认 zh)
+    │   ├─► 摘要生成        (--summary)
+    │   ├─► 视频下载         (--download，bestvideo + 自动合并音频)
+    │   └─► AI 封面          (--cover)
     │
-    ├─► 断点续传：检查已有产出，跳过已完成步骤
+    ├─► 断点续传：每个步骤独立检查已有产出
     │
-    └─► 汇总报告：成功/跳过/失败统计
+    ├─► 容错：任一步骤失败不中断其他步骤/视频
+    │
+    └─► 汇总报告：按步骤分别统计 成功/跳过/失败 + 失败明细
 ```
 
 ### 笔记工作流

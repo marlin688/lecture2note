@@ -372,19 +372,13 @@ def download_audio(url: str, output_dir: Path) -> Path:
         下载的音频文件路径
     """
     import yt_dlp
+    from l2n.ytdlp_opts import info_opts, download_opts
 
     output_dir.mkdir(parents=True, exist_ok=True)
     output_template = str(output_dir / "audio.%(ext)s")
 
     # 先获取视频信息（用于时长校验和检测已有文件）
-    ydl_info_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "format": "bestaudio/best",
-        "js_runtimes": {"node": {}},
-        "cookiesfrombrowser": ("chrome",),
-    }
-    with yt_dlp.YoutubeDL(ydl_info_opts) as ydl:
+    with yt_dlp.YoutubeDL({**info_opts(), "format": "bestaudio/best"}) as ydl:
         info = ydl.extract_info(url, download=False)
     expected_duration = info.get("duration", 0)
 
@@ -417,14 +411,11 @@ def download_audio(url: str, output_dir: Path) -> Path:
             click.echo(f"   ⚠️ 已有音频文件不完整，重新下载...")
             existing.unlink()
 
-    ydl_opts = {
-        "format": "bestaudio[ext=m4a]/bestaudio",
-        "outtmpl": output_template,
-        "quiet": True,
-        "no_warnings": True,
-        "js_runtimes": {"node": {}},
-        "cookiesfrombrowser": ("chrome",),
-    }
+    ydl_opts = download_opts(
+        format="bestaudio[ext=m4a]/bestaudio",
+        outtmpl=output_template,
+        quiet=True,
+    )
 
     # 下载音频（最多重试 3 次）
     MAX_RETRIES = 3
