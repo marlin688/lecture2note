@@ -5,3 +5,8 @@ __pycache__/
 *.pyc
 .DS_Store
 output/
+
+# 批量跑产生的本地副产物
+batch_run.log
+urls.txt
+*.log
